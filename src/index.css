@@ -41,25 +41,71 @@ body {
 
 /* Screenplay: Courier Prime (loaded from Google Fonts in index.html) */
 /* Print layout: paginated script (page breaks inserted by editor). */
-.script-print-paginated .prose > .script-page-break + * {
+.screenplay-editor.script-print-paginated .prose [data-page-break] + *,
+.screenplay-editor.script-print-paginated .prose .script-page-break + * {
   padding-top: 1in;
 }
 
-.script-page-break {
-  display: block;
-  height: 0;
-  margin: 0;
-  padding: 0;
-  border: none;
-  clear: both;
-  user-select: none;
+/*
+ * Page gap: keep document flow predictable (~40px band). The gray “rail” is painted in ::before so
+ * pagination measurements don’t swing with huge padding/margins on the break node (reduces flicker).
+ */
+.screenplay-editor.script-print-paginated .prose [data-page-break],
+.screenplay-editor.script-print-paginated [data-page-break] {
+  display: block !important;
+  position: relative;
+  box-sizing: border-box !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 20px 0 !important;
+  overflow: visible !important;
+  clear: both !important;
+  user-select: none !important;
+  pointer-events: none !important;
+  left: auto !important;
+  width: auto !important;
+  max-width: none !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
 }
 
-.screenplay-editor .prose > .script-page-break::before {
+.screenplay-editor.script-print-paginated .prose [data-page-break]::before,
+.screenplay-editor.script-print-paginated [data-page-break]::before {
   content: "";
+  position: absolute;
+  left: -1in;
+  width: calc(100% + 2in);
+  top: 0;
+  bottom: 0;
+  box-sizing: border-box;
+  /* tailwind zinc-600 — matches ScriptEditor print scroll area */
+  background: rgb(82 82 91) !important;
+  border-top: 1px solid rgba(0, 0, 0, 0.32) !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.28) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
+  pointer-events: none;
+}
+
+.screenplay-editor.script-print-paginated .prose [data-page-break]::after,
+.screenplay-editor.script-print-paginated [data-page-break]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 5rem;
+  max-width: 90%;
+  border-top: 1px dashed rgba(255, 255, 255, 0.22);
+  pointer-events: none;
+}
+
+/* Fallback when pageBreak appears outside print layout (should be rare). */
+.script-page-break {
   display: block;
-  margin: 0.5rem 0 0.35rem;
-  border-top: 1px dashed rgba(0, 0, 0, 0.14);
+  clear: both;
+  user-select: none;
 }
 
 .screenplay-editor,

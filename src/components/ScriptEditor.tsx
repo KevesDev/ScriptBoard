@@ -51,7 +51,7 @@ import { base64ToUtf8Text, utf8TextToBase64 } from '../lib/scriptContentBase64';
 /** US Letter height in CSS px (96px per inch). */
 const US_LETTER_PAGE_CSS_PX = 96 * 11;
 
-/** Vertical center (px from top of paper) for each page number in the print gutter. */
+/** Fallback when no `pageBreak` nodes yet: band centers by US Letter height. */
 function printPageMarkerCenters(totalHeightPx: number): { num: number; top: number }[] {
   const h = Math.max(0, totalHeightPx);
   const n = Math.max(1, Math.ceil(h / US_LETTER_PAGE_CSS_PX));
@@ -62,6 +62,28 @@ function printPageMarkerCenters(totalHeightPx: number): { num: number; top: numb
     markers.push({ num: i + 1, top: (bandTop + bandBottom) / 2 });
   }
   return markers;
+}
+
+/** Gutter numbers aligned to real page-break rails (px from top of paper). */
+function gutterMarkersFromPaper(paperEl: HTMLElement): { num: number; top: number }[] {
+  const sh = paperEl.scrollHeight;
+  const breaks = [...paperEl.querySelectorAll('[data-page-break]')] as HTMLElement[];
+  if (breaks.length === 0) {
+    return printPageMarkerCenters(sh);
+  }
+  const midY = (el: HTMLElement) => {
+    const pr = paperEl.getBoundingClientRect();
+    const er = el.getBoundingClientRect();
+    return er.top + er.height / 2 - pr.top;
+  };
+  const mids = breaks.map(midY);
+  const out: { num: number; top: number }[] = [];
+  out.push({ num: 1, top: Math.max(mids[0] / 2, 16) });
+  for (let i = 1; i < mids.length; i++) {
+    out.push({ num: i + 1, top: (mids[i - 1] + mids[i]) / 2 });
+  }
+  out.push({ num: breaks.length + 1, top: (mids[mids.length - 1] + sh) / 2 });
+  return out;
 }
 
 /** Scene titles in document order from stored TipTap JSON (for link picker on other pages). */
@@ -269,8 +291,9 @@ export const ScriptEditor: React.FC = () => {
   const paginationEnabledRef = useRef(scriptLayout === 'print');
   paginationEnabledRef.current = scriptLayout === 'print';
   const paperRef = useRef<HTMLDivElement>(null);
-  /** Measured paper `scrollHeight`; drives gutter page numbers in print layout. */
+  /** Measured paper `scrollHeight`; drives gutter column height in print layout. */
   const [paperScrollHeight, setPaperScrollHeight] = useState(US_LETTER_PAGE_CSS_PX);
+  const [printGutterMarkers, setPrintGutterMarkers] = useState<{ num: number; top: number }[]>([]);
 
   const [activeRightTab, setActiveRightTab] = React.useState<'outline' | 'documents' | 'info' | 'notes' | 'comments'>('documents');
   const [editingTabId, setEditingTabId] = React.useState<string | null>(null);
@@ -446,7 +469,7 @@ export const ScriptEditor: React.FC = () => {
       ScreenplayPagination.configure({
         getEnabled: () => paginationEnabledRef.current,
         getDefer: () => loadingPageContentRef.current,
-        pageBodyHeightPx: 96 * 9,
+        pageBodyHeightPx: 96 * 9 - 52,
       }),
       ScreenplayTabCycle,
       ScreenplayDefaultEnter,
@@ -557,6 +580,10 @@ export const ScriptEditor: React.FC = () => {
     const el = paperRef.current;
     if (!el) return;
     setPaperScrollHeight(el.scrollHeight);
+    requestAnimationFrame(() => {
+      const p = paperRef.current;
+      if (p) setPrintGutterMarkers(gutterMarkersFromPaper(p));
+    });
   }, [scriptLayout]);
 
   useEffect(() => {
@@ -582,11 +609,6 @@ export const ScriptEditor: React.FC = () => {
       editor.off('transaction', run);
     };
   }, [editor, scriptLayout, recalcPaperMetrics]);
-
-  const printGutterMarkers = useMemo(
-    () => (scriptLayout === 'print' ? printPageMarkerCenters(paperScrollHeight) : []),
-    [scriptLayout, paperScrollHeight],
-  );
 
   useEffect(() => {
     const fixEditable = () => {
@@ -689,6 +711,12 @@ export const ScriptEditor: React.FC = () => {
   }, [activeScriptPageId, editor, project?.id]); // `project.id` only — avoids reload loops on content edits
 
   useEffect(() => {
+    if (scriptLayout !== 'print') {
+      setPrintGutterMarkers([]);
+    }
+  }, [scriptLayout]);
+
+  useEffect(() => {
     if (!editor || editor.isDestroyed) return;
     if (scriptLayout === 'print') {
       editor.commands.repaginateScript();
@@ -759,7 +787,7 @@ export const ScriptEditor: React.FC = () => {
 
   const scriptPaperClass =
     scriptLayout === 'print'
-      ? 'min-h-[11in] w-full max-w-[8.5in] flex-1 rounded-sm bg-[#ffffff] text-black shadow-2xl screenplay-editor script-print-paginated'
+      ? 'min-h-[11in] w-full max-w-[8.5in] flex-1 overflow-x-visible overflow-y-visible rounded-sm bg-[#ffffff] text-black shadow-2xl screenplay-editor script-print-paginated'
       : 'mx-auto min-h-[1100px] max-w-[850px] bg-[#ffffff] text-black shadow-2xl screenplay-editor';
 
   const scriptPaperEl = (
@@ -793,7 +821,14 @@ export const ScriptEditor: React.FC = () => {
         navigateInternalScriptHrefRef.current(raw);
       }}
     >
-      <EditorContent editor={editor} className="h-full cursor-text py-[1in] px-[1in]" />
+      <EditorContent
+        editor={editor}
+        className={
+          scriptLayout === 'print'
+            ? 'h-full cursor-text overflow-visible py-[1in] px-[1in]'
+            : 'h-full cursor-text py-[1in] px-[1in]'
+        }
+      />
     </div>
   );
 

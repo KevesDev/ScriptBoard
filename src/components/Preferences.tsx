@@ -514,10 +514,7 @@ export const Preferences = () => {
                 <section className="space-y-6">
                   <div>
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">Script editor</h3>
-                    <p className="mt-1 text-xs text-neutral-500">
-                      Tab / Shift+Tab cycle screenplay line types (scene → action → character → parenthetical → dialogue →
-                      transition). Ctrl/Cmd+1–6 still jump to a type directly.
-                    </p>
+                    <p className="mt-1 text-xs text-neutral-500">Tab/Shift+Tab to cycle script line types.</p>
                   </div>
 
                   <div className="rounded-xl border border-neutral-800 bg-[#1a1a1a] p-4">
@@ -549,15 +546,13 @@ export const Preferences = () => {
                   <div className="rounded-xl border border-neutral-800 bg-[#1a1a1a] p-4">
                     <div className="mb-3 text-sm font-medium text-neutral-200">Layout</div>
                     <p className="mb-3 text-xs text-neutral-500">
-                      Print pages automatically inserts page breaks so each page fits roughly US Letter body text (9″ tall between 1″
-                      top/bottom margins). Page numbers sit in the left gutter. Very long single blocks are not split mid-paragraph.
-                      Continuous is one long sheet (previous default look).
+                      Print adds page breaks and numbers along the side. Continuous is one long scrolling page.
                     </p>
                     <div className="flex flex-col gap-2">
                       {(
                         [
-                          { id: 'print' as const, label: 'Print pages', sub: '8.5″ width, auto page breaks, gutter numbers' },
-                          { id: 'continuous' as const, label: 'Continuous', sub: 'Single scroll, dark margins' },
+                          { id: 'print' as const, label: 'Print pages', sub: 'US Letter–style pages with side numbers' },
+                          { id: 'continuous' as const, label: 'Continuous', sub: 'One page, dark margins' },
                         ] satisfies { id: ScriptEditorLayout; label: string; sub: string }[]
                       ).map((opt) => (
                         <label

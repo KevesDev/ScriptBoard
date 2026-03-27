@@ -5,6 +5,9 @@ import type { Node as PMNode } from '@tiptap/pm/model';
 
 export const screenplayPaginationKey = new PluginKey('screenplayPagination');
 
+/** Matches `padding-top: 1in` on blocks after a page break (index.css). */
+const PRINT_BLOCK_TOP_PAD_PX = 96;
+
 export interface ScreenplayPaginationOptions {
   getEnabled: () => boolean;
   getDefer: () => boolean;
@@ -21,19 +24,64 @@ function collectPageBreakRanges(doc: PMNode): { from: number; to: number }[] {
   return ranges;
 }
 
-function blockMetrics(view: EditorView): { pos: number; height: number }[] {
-  const out: { pos: number; height: number }[] = [];
+/** Outer height for a top-level block at document position `pos` (before the node). */
+function domBlockHeight(view: EditorView, pos: number): number {
+  let el = view.nodeDOM(pos) as HTMLElement | null;
+  if (!el || el.nodeType !== 1) {
+    el = view.nodeDOM(pos + 1) as HTMLElement | null;
+  }
+  if (!el || el.nodeType !== 1) {
+    try {
+      const { node } = view.domAtPos(pos, 1);
+      let n: Node | null = node;
+      if (n.nodeType === Node.TEXT_NODE) n = n.parentElement;
+      el = n as HTMLElement | null;
+      while (el && el.parentElement && el.parentElement !== view.dom) {
+        el = el.parentElement;
+      }
+    } catch {
+      return 6;
+    }
+  }
+  if (!el || el.nodeType !== 1) return 6;
+  const cs = window.getComputedStyle(el);
+  const mt = parseFloat(cs.marginTop) || 0;
+  const mb = parseFloat(cs.marginBottom) || 0;
+  return el.offsetHeight + mt + mb;
+}
+
+function splitOneOversizedTopLevelBlock(view: EditorView, pageBody: number, key: PluginKey): boolean {
+  let target: { a: number; b: number } | null = null;
   view.state.doc.forEach((child, offset) => {
+    if (target) return;
+    if (child.type.name === 'pageBreak' || !child.isTextblock) return;
+    const pos = 1 + offset;
+    const h = domBlockHeight(view, pos);
+    if (h <= pageBody + 8) return;
+    const a = pos + 1;
+    const b = pos + child.nodeSize - 1;
+    if (b <= a) return;
+    target = { a, b };
+  });
+  if (!target) return false;
+  const mid = Math.floor((target.a + target.b) / 2);
+  const tr = view.state.tr.split(mid);
+  tr.setMeta(key, true);
+  tr.setMeta('addToHistory', false);
+  view.dispatch(tr);
+  return true;
+}
+
+function blockMetrics(view: EditorView): { pos: number; height: number }[] {
+  const doc = view.state.doc;
+  const out: { pos: number; height: number }[] = [];
+  doc.forEach((child, offset, index) => {
     if (child.type.name === 'pageBreak') return;
     const pos = 1 + offset;
-    const dom = view.nodeDOM(pos) as HTMLElement | null;
-    let h = 0;
-    if (dom && dom.nodeType === 1) {
-      const el = dom as HTMLElement;
-      const cs = window.getComputedStyle(el);
-      const mt = parseFloat(cs.marginTop) || 0;
-      const mb = parseFloat(cs.marginBottom) || 0;
-      h = el.offsetHeight + mt + mb;
+    let h = domBlockHeight(view, pos);
+    if (index > 0 && doc.child(index - 1).type.name === 'pageBreak') {
+      h -= PRINT_BLOCK_TOP_PAD_PX;
+      h = Math.max(h, 6);
     }
     out.push({ pos, height: Math.max(h, 6) });
   });
@@ -65,28 +113,9 @@ function desiredBreakBeforeBlockIndices(blocks: { height: number }[], pageBody: 
   return set;
 }
 
-function currentBreakBeforeBlockIndices(doc: PMNode): Set<number> {
-  const set = new Set<number>();
-  let nextBlockIndex = 0;
-  doc.forEach((child) => {
-    if (child.type.name === 'pageBreak') {
-      set.add(nextBlockIndex);
-    } else {
-      nextBlockIndex += 1;
-    }
-  });
-  return set;
-}
-
 function desiredBreakPositions(blocks: { pos: number; height: number }[], pageBody: number): number[] {
   const indices = desiredBreakBeforeBlockIndices(blocks, pageBody);
   return blocks.filter((_, i) => indices.has(i)).map((b) => b.pos);
-}
-
-function setsEqualNum(a: Set<number>, b: Set<number>): boolean {
-  if (a.size !== b.size) return false;
-  for (const x of a) if (!b.has(x)) return false;
-  return true;
 }
 
 function stripPageBreaks(view: EditorView, key: PluginKey) {
@@ -105,19 +134,48 @@ function stripPageBreaks(view: EditorView, key: PluginKey) {
 function insertBreaksAt(view: EditorView, positions: number[], key: PluginKey) {
   const pageBreakType = view.state.schema.nodes.pageBreak;
   if (!pageBreakType || positions.length === 0) return;
+  const unique = [...new Set(positions)].sort((a, b) => b - a);
   let tr = view.state.tr;
   tr.setMeta(key, true);
   tr.setMeta('addToHistory', false);
-  for (const p of [...positions].sort((a, b) => b - a)) {
+  for (const p of unique) {
     tr = tr.insert(p, pageBreakType.create());
   }
   if (tr.docChanged) view.dispatch(tr);
 }
 
-/** Strip all breaks, re-measure, insert desired breaks (two layout frames). */
-function fullRepaginate(view: EditorView, pageBody: number, key: PluginKey) {
-  const pageBreakType = view.state.schema.nodes.pageBreak;
-  if (!pageBreakType) return;
+function collapseAdjacentPageBreaks(view: EditorView, key: PluginKey) {
+  const doc = view.state.doc;
+  const toDelete: { from: number; to: number }[] = [];
+  let prevWasBreak = false;
+  doc.forEach((child, offset) => {
+    const pos = 1 + offset;
+    if (child.type.name === 'pageBreak') {
+      if (prevWasBreak) {
+        toDelete.push({ from: pos, to: pos + child.nodeSize });
+      }
+      prevWasBreak = true;
+    } else {
+      prevWasBreak = false;
+    }
+  });
+  if (toDelete.length === 0) return;
+  let tr = view.state.tr;
+  tr.setMeta(key, true);
+  tr.setMeta('addToHistory', false);
+  toDelete.sort((a, b) => b.from - a.from);
+  for (const d of toDelete) {
+    tr = tr.delete(d.from, d.to);
+  }
+  view.dispatch(tr);
+}
+
+/**
+ * One full pass: remove all auto breaks, wait for layout, split tall paragraphs, insert breaks from measurements.
+ * No “want === have” shortcut — that skipped work when DOM heights were still wrong (~6px), so no breaks ever appeared.
+ */
+export function repaginatePrintView(view: EditorView, pageBody: number, key: PluginKey) {
+  if (!view.dom.isConnected || !view.state.schema.nodes.pageBreak) return;
 
   let tr = view.state.tr;
   tr.setMeta(key, true);
@@ -128,39 +186,25 @@ function fullRepaginate(view: EditorView, pageBody: number, key: PluginKey) {
     tr = tr.delete(from, to);
   }
 
-  const afterClean = () => {
+  const afterStrip = () => {
     if (!view.dom.isConnected) return;
+    let guard = 0;
+    while (guard++ < 120 && splitOneOversizedTopLevelBlock(view, pageBody, key)) {
+      /* one split per loop; layout updates before next */
+    }
     const blocks = blockMetrics(view);
     const desired = desiredBreakPositions(blocks, pageBody);
     insertBreaksAt(view, desired, key);
+    collapseAdjacentPageBreaks(view, key);
   };
 
   if (tr.docChanged) {
     view.dispatch(tr);
-    requestAnimationFrame(() => {
-      requestAnimationFrame(afterClean);
-    });
+    requestAnimationFrame(() => requestAnimationFrame(afterStrip));
   } else {
-    requestAnimationFrame(() => {
-      requestAnimationFrame(afterClean);
-    });
+    requestAnimationFrame(() => requestAnimationFrame(afterStrip));
   }
 }
-
-function runPaginationPass(view: EditorView, pageBody: number, key: PluginKey) {
-  if (!view.dom.isConnected) return;
-  if (!view.state.schema.nodes.pageBreak) return;
-
-  const blocks = blockMetrics(view);
-  const want = desiredBreakBeforeBlockIndices(blocks, pageBody);
-  const have = currentBreakBeforeBlockIndices(view.state.doc);
-
-  if (setsEqualNum(want, have)) return;
-
-  fullRepaginate(view, pageBody, key);
-}
-
-// Remove mistaken _opts - runPaginationPass is called with enabled checked outside
 
 export function scheduleScreenplayRepagination(
   view: EditorView,
@@ -168,10 +212,8 @@ export function scheduleScreenplayRepagination(
   opts: { enabled: boolean; defer: boolean },
 ) {
   if (!opts.enabled || opts.defer) return;
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      runPaginationPass(view, pageBody, screenplayPaginationKey);
-    });
+  queueMicrotask(() => {
+    repaginatePrintView(view, pageBody, screenplayPaginationKey);
   });
 }
 
@@ -182,7 +224,7 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
     return {
       getEnabled: () => false,
       getDefer: () => false,
-      pageBodyHeightPx: 96 * 9,
+      pageBodyHeightPx: 96 * 9 - 52,
     };
   },
 
@@ -216,35 +258,33 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
       new Plugin({
         key,
         view: (view: EditorView) => {
-          let rafOuter = 0;
-          let rafInner = 0;
+          let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
           const run = () => {
-            rafOuter = 0;
-            rafInner = 0;
+            debounceTimer = null;
             if (!view.dom.isConnected) return;
-
             if (!opts.getEnabled()) {
               stripPageBreaks(view, key);
               return;
             }
             if (opts.getDefer()) return;
-
-            runPaginationPass(view, pageBody, key);
+            repaginatePrintView(view, pageBody, key);
           };
+
+          const schedule = () => {
+            if (debounceTimer !== null) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(run, 100);
+          };
+
+          schedule();
 
           return {
             update: (updatedView, prevState) => {
               if (updatedView.state.doc.eq(prevState.doc)) return;
-              if (rafOuter) cancelAnimationFrame(rafOuter);
-              if (rafInner) cancelAnimationFrame(rafInner);
-              rafOuter = requestAnimationFrame(() => {
-                rafInner = requestAnimationFrame(run);
-              });
+              schedule();
             },
             destroy: () => {
-              if (rafOuter) cancelAnimationFrame(rafOuter);
-              if (rafInner) cancelAnimationFrame(rafInner);
+              if (debounceTimer !== null) clearTimeout(debounceTimer);
             },
           };
         },
