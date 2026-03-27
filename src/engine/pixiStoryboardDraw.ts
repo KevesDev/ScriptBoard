@@ -90,6 +90,7 @@ export const drawStrokeToGraphics = (g: PIXI.Graphics, stroke: Stroke, config: B
   const color = isEraser ? 0xffffff : PIXI.utils.string2hex(stroke.color);
   const alpha = config.flow ?? 1.0;
 
+  // SHAPE BYPASS: Ensure absolute bounds so PIXI never drops negative shapes
   if (['line', 'rectangle', 'ellipse'].includes(stroke.tool)) {
     if (stroke.points.length < 6) return;
     const startX = stroke.points[0];
@@ -109,7 +110,7 @@ export const drawStrokeToGraphics = (g: PIXI.Graphics, stroke: Stroke, config: B
       g.moveTo(startX, startY);
       g.lineTo(endX, endY);
     } else if (stroke.tool === 'rectangle') {
-      g.drawRect(startX, startY, endX - startX, endY - startY);
+      g.drawRect(Math.min(startX, endX), Math.min(startY, endY), Math.abs(endX - startX), Math.abs(endY - startY));
     } else if (stroke.tool === 'ellipse') {
       const radiusX = Math.abs(endX - startX) / 2;
       const radiusY = Math.abs(endY - startY) / 2;
@@ -172,13 +173,9 @@ export type RenderLayersIntoOptions = {
   layerTransform?: { offsetX: number; offsetY: number; scale: number; opacityMul: number } | null;
   selectedStrokeIndices?: Set<number>;
   dragOffset?: { x: number; y: number } | null;
-  /** Fired when a raster (or data-URL) texture finishes loading so the host can re-render / refresh thumbnails. */
   onAsyncLayersReady?: () => void;
 };
 
-/**
- * Clears `container` and draws `layersData` (Pixi workspace / PNG export).
- */
 export function renderLayersIntoContainer(
   container: PIXI.Container,
   layersData: Layer[],
@@ -237,8 +234,12 @@ export function renderLayersIntoContainer(
         if (isActiveSkin && layer.id === activeLayerId && dragOffset && selectedStrokeIndices.has(i)) {
           return;
         }
+        
         const config = stroke.brushConfig || getBrushConfig(stroke.preset);
-        if (config.textureBase64) {
+        const isShape = ['line', 'rectangle', 'ellipse'].includes(stroke.tool);
+
+        // FIXED: Explicitly bypass textured stamps if the stroke is a shape
+        if (config.textureBase64 && !isShape) {
           const c = new PIXI.Container();
           drawStampsToContainer(c, stroke, config);
           if (stroke.tool === 'eraser') {

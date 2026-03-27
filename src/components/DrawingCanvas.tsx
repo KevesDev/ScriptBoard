@@ -37,9 +37,12 @@ export const DrawingCanvas = () => {
   const [isSpacePanning, setIsSpacePanning] = useState(false);
   const [onionSkinEnabled, setOnionSkinEnabled] = useState(() => preferences.onionSkin?.startEnabled ?? false);
   
-  // NEW: Bucket UI State
   const [bucketMode, setBucketMode] = useState<BucketMode>('all');
   const [showBucketMenu, setShowBucketMenu] = useState(false);
+  
+  // NEW: Sidebar Layout State
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(288); // Default w-72 (72 * 4px)
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -143,7 +146,6 @@ export const DrawingCanvas = () => {
   const mountEngine = useCallback((node: HTMLDivElement | null) => {
     if (node) {
       if (!engineRef.current) {
-        Logger.info('DrawingCanvas', 'DOM Ready. Booting WebGL Engine...');
         engineRef.current = new StoryboardEngine({
           container: node,
           width: CANVAS_WIDTH, height: CANVAS_HEIGHT, 
@@ -151,7 +153,6 @@ export const DrawingCanvas = () => {
           onPanStart: () => { setIsSpacePanning(true); isPanningRef.current = true; },
           onColorPicked: (hex) => { setColor(hex); setTool('pen'); },
           
-          // REFACTORED: Paint Bucket Current vs All Layers
           onBucketFillRequest: (x, y) => {
             const { activePanelId, activeLayerId, panelLayersForCanvas, color, commitHistory, updateLayerStrokes, getBrushConfig, bucketMode } = latestRef.current;
             const layer = panelLayersForCanvas.find((l) => l.id === activeLayerId);
@@ -166,21 +167,17 @@ export const DrawingCanvas = () => {
                     commitHistory(); 
                     updateLayerStrokes(activePanelId, activeLayerId, [...(L!.strokes || []), { tool: 'fill', color, width: 1, points: [], fillPaths: paths }]); 
                   } else {
-                    Logger.warn('DrawingCanvas', 'Vector fill failed to generate paths. Ensure lines form a closed loop, or switch to a Raster layer.');
+                    Logger.warn('DrawingCanvas', 'Vector fill failed to generate boundaries.');
                   }
-                } catch(e) {
-                  Logger.error('DrawingCanvas', `Vector Paint Bucket crash: ${e}`);
-                }
+                } catch(e) { Logger.error('DrawingCanvas', `Vector Bucket fail: ${e}`); }
               }, 0);
             } else {
-              // RASTER BUCKET FILL
               if (bucketMode === 'all') {
                 const rawCanvas = node.querySelector('canvas');
                 if (!rawCanvas) return;
                 const newBase64 = applyRasterBucketFromCompositeCanvas(rawCanvas, x, y, color, CANVAS_WIDTH, CANVAS_HEIGHT);
                 if (newBase64) { commitHistory(); useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, newBase64); }
               } else {
-                // ISOLATE LAYER: Render ONLY the active layer to an offscreen canvas, then flood fill it
                 const off = document.createElement('canvas'); off.width = CANVAS_WIDTH; off.height = CANVAS_HEIGHT;
                 const ctx = off.getContext('2d', { willReadFrequently: true });
                 if (ctx) {
@@ -193,7 +190,6 @@ export const DrawingCanvas = () => {
                     };
                     img.src = layer.dataBase64;
                   } else {
-                    // Filling an empty layer fills the whole screen
                     ctx.fillStyle = color; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
                     commitHistory(); useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, off.toDataURL('image/png'));
                   }
@@ -228,7 +224,6 @@ export const DrawingCanvas = () => {
             }
           },
 
-          // REFACTORED: Raster Shape Rendering Bypass
           onStrokeComplete: (stroke) => {
             const { activePanelId, activeLayerId, panelLayersForCanvas, commitHistory, updateLayerStrokes, updateThumbnail } = latestRef.current;
             const layer = panelLayersForCanvas.find(l => l.id === activeLayerId);
@@ -240,19 +235,24 @@ export const DrawingCanvas = () => {
               const ctx = off.getContext('2d');
               if (ctx) {
                 const drawRaster = async () => {
-                  if (layer.dataBase64) { const img = new Image(); await new Promise((r) => { img.onload = r; img.src = layer.dataBase64!; }); ctx.drawImage(img, 0, 0); }
+                  if (layer.dataBase64) { 
+                      const img = new Image(); 
+                      await new Promise((r) => { img.onload = r; img.src = layer.dataBase64!; }); 
+                      ctx.drawImage(img, 0, 0); 
+                  }
                   
-                  // BYPASS: Draw pure math geometry directly to Canvas2D to prevent Freehand Tapering bug
                   if (['line', 'rectangle', 'ellipse'].includes(stroke.tool)) {
-                    ctx.strokeStyle = stroke.color;
-                    ctx.lineWidth = stroke.width;
-                    ctx.lineCap = 'round';
-                    ctx.lineJoin = 'round';
-                    ctx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
-                    
                     if (stroke.points.length >= 6) {
+                        ctx.save();
+                        ctx.strokeStyle = stroke.color;
+                        ctx.lineWidth = stroke.width;
+                        ctx.lineCap = 'round';
+                        ctx.lineJoin = 'round';
+                        ctx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+                        
                         const x1 = stroke.points[0], y1 = stroke.points[1];
-                        const x2 = stroke.points[stroke.points.length - 3], y2 = stroke.points[stroke.points.length - 2];
+                        const x2 = stroke.points[3], y2 = stroke.points[4];
+                        
                         ctx.beginPath();
                         if (stroke.tool === 'line') {
                             ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
@@ -264,9 +264,9 @@ export const DrawingCanvas = () => {
                             ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
                         }
                         ctx.stroke();
+                        ctx.restore();
                     }
                   } else {
-                    // Standard Organic Brushes
                     if (stroke.brushConfig?.textureBase64) await BrushTextureManager.getTexture(stroke.brushConfig.textureBase64, stroke.brushConfig.id);
                     renderBrushStrokeToContext(ctx, stroke, stroke.brushConfig!);
                   }
@@ -284,7 +284,6 @@ export const DrawingCanvas = () => {
       }
     } else {
       if (engineRef.current) {
-        Logger.info('DrawingCanvas', 'DOM Unmounted. Destroying WebGL Engine...');
         engineRef.current.destroy();
         engineRef.current = null;
       }
@@ -295,9 +294,10 @@ export const DrawingCanvas = () => {
     engineRef.current?.updateState({
       tool, brushPreset, color, brushSize, activeLayerId, activePanelId, panelLayers: panelLayersForCanvas,
       onionBeforeStacks, onionAfterStacks, underlayStacks, onionSkinEnabled, onionPrefs: onionSkinPrefs,
+      onionBeforeOpacities, onionAfterOpacities, // FIXED: Injecting the explicitly tracked arrays
       selectedStrokeIndices, cameraTransform, layerTransform, zoom
     });
-  }, [tool, brushPreset, color, brushSize, activeLayerId, activePanelId, panelLayersForCanvas, onionBeforeStacks, onionAfterStacks, underlayStacks, onionSkinEnabled, onionSkinPrefs, selectedStrokeIndices, cameraTransform, layerTransform, zoom]);
+  }, [tool, brushPreset, color, brushSize, activeLayerId, activePanelId, panelLayersForCanvas, onionBeforeStacks, onionAfterStacks, onionBeforeOpacities, onionAfterOpacities, underlayStacks, onionSkinEnabled, onionSkinPrefs, selectedStrokeIndices, cameraTransform, layerTransform, zoom]);
 
   const handleColorChange = (c: string) => {
     setColor(c);
@@ -386,7 +386,7 @@ export const DrawingCanvas = () => {
       }
 
       if (combo === (sc.paste ?? 'ctrl+v')) {
-        let data: string | null = null; try { data = localStorage.getItem(STORYBOARD_CLIPBOARD_STORAGE_KEY); } catch { return; }
+        let data: string | null = null; try { localStorage.getItem(STORYBOARD_CLIPBOARD_STORAGE_KEY); } catch { return; }
         if (!data) return;
         const pasted = parseStoryboardClipboard(data); if (!pasted || pasted.length === 0) return;
         const L = resolveL(); if (!L || L.type !== 'vector' || L.locked) return;
@@ -424,7 +424,11 @@ export const DrawingCanvas = () => {
 
       <div className="flex-1 relative flex flex-col bg-[#1e1e1e] overflow-hidden">
         
-        <StoryboardTopBar onionSkinEnabled={onionSkinEnabled} setOnionSkinEnabled={setOnionSkinEnabled} zoom={zoom} setZoom={setZoom} handleZoomIn={handleZoomIn} handleZoomOut={handleZoomOut} fitToScreen={fitToScreen} />
+        <StoryboardTopBar 
+          onionSkinEnabled={onionSkinEnabled} setOnionSkinEnabled={setOnionSkinEnabled} 
+          zoom={zoom} setZoom={setZoom} handleZoomIn={handleZoomIn} handleZoomOut={handleZoomOut} fitToScreen={fitToScreen} 
+          isSidebarOpen={isSidebarOpen} setIsSidebarOpen={setIsSidebarOpen}
+        />
 
         <div 
            className="flex-1 relative overflow-auto bg-[#151515] flex items-center justify-center p-8" 
@@ -441,7 +445,31 @@ export const DrawingCanvas = () => {
         </div>
       </div>
 
-      <StoryboardSidebar tool={tool} brushPreset={brushPreset} handleBrushPresetChange={handleBrushPresetChange} brushSize={brushSize} handleBrushSizeChange={handleBrushSizeChange} color={color} handleColorChange={handleColorChange} swatches={swatches} panelLayersForCanvas={panelLayersForCanvas} activeLayerId={activeLayerId} activePanelId={activePanelId} getBrushConfig={getBrushConfig} />
+      {isSidebarOpen && (
+        <>
+          <div 
+            className="w-1 cursor-col-resize bg-black hover:bg-blue-500 z-20 shrink-0 transition-colors"
+            title="Drag to resize panel"
+            onPointerDown={(e) => {
+              const startX = e.clientX;
+              const startWidth = sidebarWidth;
+              const onMove = (moveEvent: PointerEvent) => {
+                const newWidth = Math.max(200, Math.min(600, startWidth - (moveEvent.clientX - startX)));
+                setSidebarWidth(newWidth);
+              };
+              const onUp = () => {
+                window.removeEventListener('pointermove', onMove);
+                window.removeEventListener('pointerup', onUp);
+              };
+              window.addEventListener('pointermove', onMove);
+              window.addEventListener('pointerup', onUp);
+            }}
+          />
+          <div style={{ width: sidebarWidth }} className="shrink-0 flex flex-col z-10 border-l border-black overflow-hidden bg-[#323232]">
+            <StoryboardSidebar tool={tool} brushPreset={brushPreset} handleBrushPresetChange={handleBrushPresetChange} brushSize={brushSize} handleBrushSizeChange={handleBrushSizeChange} color={color} handleColorChange={handleColorChange} swatches={swatches} panelLayersForCanvas={panelLayersForCanvas} activeLayerId={activeLayerId} activePanelId={activePanelId} getBrushConfig={getBrushConfig} />
+          </div>
+        </>
+      )}
     </div>
   );
 };

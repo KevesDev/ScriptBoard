@@ -1,5 +1,4 @@
 import * as PIXI from 'pixi.js';
-import { UPDATE_PRIORITY } from '@pixi/ticker';
 import { drawStampsToContainer, drawStrokeToGraphics, renderLayersIntoContainer } from './pixiStoryboardDraw';
 import { makeOnionTintFilter } from '../lib/onionSkinPixi';
 import { strokeAnyPointInRect, strokeBounds } from '../lib/storyboardClipboard';
@@ -32,13 +31,7 @@ export class StoryboardEngine {
     selectionPreviewLayer: new PIXI.Container(),
     selectionOverlay: new PIXI.Graphics(),
     activeStrokeGraphics: new PIXI.Graphics(),
-    offMainRoot: new PIXI.Container(),
-    rtMain: null as PIXI.RenderTexture | null,
-    mainBoardSprite: null as PIXI.Sprite | null,
-    onionTickerFn: null as ((dt: number) => void) | null,
   };
-
-  private onionIsolated = false;
 
   public state = {
     tool: 'pen',
@@ -50,9 +43,11 @@ export class StoryboardEngine {
     panelLayers: [] as Layer[],
     onionBeforeStacks: [] as Layer[][],
     onionAfterStacks: [] as Layer[][],
+    onionBeforeOpacities: [] as number[], // FIXED: Explicitly tracked state
+    onionAfterOpacities: [] as number[],  // FIXED: Explicitly tracked state
     underlayStacks: [] as Layer[][],
     onionSkinEnabled: false,
-    onionPrefs: { beforeColor: '#ff6b6b', afterColor: '#4dabf7', beforeOpacities: [] as number[], afterOpacities: [] as number[] },
+    onionPrefs: { beforeColor: '#ff6b6b', afterColor: '#4dabf7' } as any,
     selectedStrokeIndices: new Set<number>(),
     cameraTransform: null as any,
     layerTransform: null as any,
@@ -110,10 +105,6 @@ export class StoryboardEngine {
     window.addEventListener('pointerup', this.onPointerUp);
   }
 
-  /**
-   * CRITICAL MATH FIX: Un-projects raw Screen Space coordinates back into 
-   * Camera Local Space. If this is skipped, strokes draw off-screen when zoomed/panned.
-   */
   private getCanvasPoint(e: PointerEvent) {
     const rect = (this.app.view as HTMLCanvasElement).getBoundingClientRect();
     const rawX = (e.clientX - rect.left) * (this.config.width / rect.width);
@@ -143,14 +134,7 @@ export class StoryboardEngine {
   }
 
   private onPointerDown = (e: PointerEvent) => {
-    if (!this.state.activePanelId) {
-      Logger.warn('StoryboardEngine', 'PointerDown aborted: No Active Panel.');
-      return;
-    }
-    if (!this.state.activeLayerId) {
-      Logger.warn('StoryboardEngine', 'PointerDown aborted: Active Panel has no layers selected.');
-      return;
-    }
+    if (!this.state.activePanelId || !this.state.activeLayerId) return;
 
     if (e.button === 1) { 
       this.config.onPanStart(e);
@@ -162,8 +146,6 @@ export class StoryboardEngine {
 
     const { x, y } = this.getCanvasPoint(e);
     if (Number.isNaN(x) || Number.isNaN(y)) return;
-
-    Logger.debug('StoryboardEngine', `PointerDown at local space [${Math.round(x)}, ${Math.round(y)}] with tool: ${this.state.tool}`);
 
     if (this.state.tool === 'eyedropper') {
       const pixels = this.app.renderer.extract.pixels(this.scene.root);
@@ -255,6 +237,7 @@ export class StoryboardEngine {
       const { x, y } = this.getCanvasPoint(ev);
       if (Number.isNaN(x) || Number.isNaN(y)) continue;
       let pressure = ev.pointerType === 'pen' ? (ev.pressure > 0 ? ev.pressure : 0.1) : 0.5;
+      
       if (['line', 'rectangle', 'ellipse'].includes(this.state.tool)) {
          this.activePoints = [this.activePoints[0], this.activePoints[1], this.activePoints[2], x, y, pressure];
       } else {
@@ -308,7 +291,6 @@ export class StoryboardEngine {
     this.isDrawing = false;
 
     if (this.activePoints.length >= 3) {
-      Logger.debug('StoryboardEngine', `Stroke Complete: ${this.activePoints.length / 3} coordinates passed back to Data Layer.`);
       const finalStroke: Stroke = {
         tool: this.state.tool as any,
         preset: this.state.tool === 'eraser' ? undefined : this.state.brushPreset,
@@ -384,50 +366,12 @@ export class StoryboardEngine {
       cr.pivot.set(0, 0); cr.position.set(0, 0); cr.scale.set(1, 1); cr.rotation = 0;
     }
 
-    this.syncOnionIsolation();
     this.renderScene();
   }
 
   public setSelectionBounds(bounds: {x: number, y: number, w: number, h: number} | null) {
     this.internalSelection.bounds = bounds;
     this.renderScene();
-  }
-
-  private syncOnionIsolation() {
-    const enabled = this.state.onionSkinEnabled;
-    if (this.onionIsolated === enabled) return;
-
-    if (enabled) {
-      if (!this.scene.rtMain) {
-        this.scene.rtMain = PIXI.RenderTexture.create({ width: this.config.width, height: this.config.height, resolution: this.app.renderer.resolution });
-        this.scene.mainBoardSprite = new PIXI.Sprite(this.scene.rtMain);
-      }
-      const insertAt = this.scene.cameraRoot.getChildIndex(this.scene.layers);
-      const moveChain = [this.scene.layers, this.scene.activeStrokeLayer, this.scene.selectionPreviewLayer];
-      for (const c of moveChain) c.parent?.removeChild(c);
-      this.scene.offMainRoot.removeChildren();
-      for (const c of moveChain) this.scene.offMainRoot.addChild(c);
-      this.scene.cameraRoot.addChildAt(this.scene.mainBoardSprite!, insertAt);
-
-      const tickerFn = () => {
-        if (!this.onionIsolated || !this.scene.rtMain) return;
-        this.app.renderer.render(this.scene.offMainRoot, { renderTexture: this.scene.rtMain, clear: true });
-      };
-      this.scene.onionTickerFn = tickerFn;
-      this.app.ticker.add(tickerFn, undefined, UPDATE_PRIORITY.HIGH);
-      this.onionIsolated = true;
-    } else {
-      if (this.scene.onionTickerFn) this.app.ticker.remove(this.scene.onionTickerFn);
-      if (this.scene.mainBoardSprite?.parent) {
-        const insertAt = this.scene.cameraRoot.getChildIndex(this.scene.mainBoardSprite);
-        this.scene.cameraRoot.removeChild(this.scene.mainBoardSprite);
-        const back = [this.scene.layers, this.scene.activeStrokeLayer, this.scene.selectionPreviewLayer];
-        for (const c of back) this.scene.offMainRoot.removeChild(c);
-        let i = insertAt;
-        for (const c of back) { this.scene.cameraRoot.addChildAt(c, i); i++; }
-      }
-      this.onionIsolated = false;
-    }
   }
 
   private renderScene() {
@@ -439,14 +383,18 @@ export class StoryboardEngine {
         this.state.onionBeforeStacks.forEach((stack, i) => {
           if (!stack.length) return;
           const sub = new PIXI.Container();
-          sub.filters = [makeOnionTintFilter(this.state.onionPrefs.beforeColor, this.state.onionPrefs.beforeOpacities[i] ?? 0.25)];
+          const color = this.state.onionPrefs?.beforeColor || '#ff6b6b';
+          const opacity = this.state.onionBeforeOpacities[i] ?? 0.25;
+          sub.filters = [makeOnionTintFilter(color, opacity)];
           renderLayersIntoContainer(sub, stack, { width: this.config.width, height: this.config.height, getBrushConfig: this.config.getBrushConfig, isActiveSkin: false, activeLayerId: null, layerTransform: null, selectedStrokeIndices: new Set(), dragOffset: null });
           this.scene.prevSkin.addChild(sub);
         });
         this.state.onionAfterStacks.forEach((stack, i) => {
           if (!stack.length) return;
           const sub = new PIXI.Container();
-          sub.filters = [makeOnionTintFilter(this.state.onionPrefs.afterColor, this.state.onionPrefs.afterOpacities[i] ?? 0.25)];
+          const color = this.state.onionPrefs?.afterColor || '#4dabf7';
+          const opacity = this.state.onionAfterOpacities[i] ?? 0.25;
+          sub.filters = [makeOnionTintFilter(color, opacity)];
           renderLayersIntoContainer(sub, stack, { width: this.config.width, height: this.config.height, getBrushConfig: this.config.getBrushConfig, isActiveSkin: false, activeLayerId: null, layerTransform: null, selectedStrokeIndices: new Set(), dragOffset: null });
           this.scene.nextSkin.addChild(sub);
         });
@@ -549,7 +497,6 @@ export class StoryboardEngine {
     canvas.removeEventListener('pointerdown', this.onPointerDown);
     canvas.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
-    if (this.scene.onionTickerFn) this.app.ticker.remove(this.scene.onionTickerFn);
     
     if (canvas.parentElement) {
       canvas.parentElement.removeChild(canvas);

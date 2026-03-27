@@ -15,7 +15,7 @@ import {
   useSortable
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useMemo } from 'react';
+import { useMemo, useEffect, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { Plus, Trash2, Image as ImageIcon, GripVertical, FileText, ExternalLink } from 'lucide-react';
 import type { Panel, Scene } from '@common/models';
@@ -23,7 +23,32 @@ import { setPanelIdOnDataTransfer } from '../lib/panelTimelineDnD';
 import { getSceneScriptContext, trimBlocksForDisplay, type ScriptSceneBlock } from '../lib/scriptSceneExcerpt';
 import { nativeConfirm } from '../lib/focusAfterNativeDialog';
 
-const SortablePanel = ({ panel, sceneId }: { panel: Panel, sceneId: string }) => {
+// --- CUSTOM DRAG IMAGE GENERATOR ---
+const createDragImage = () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = 60;
+  canvas.height = 40;
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = 'rgba(14, 165, 233, 0.9)'; // sky-500
+    ctx.beginPath();
+    ctx.roundRect(0, 0, 60, 40, 4);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '10px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Panel', 30, 20);
+  }
+  const img = new Image();
+  img.src = canvas.toDataURL();
+  return img;
+};
+
+const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: string, dragImg: HTMLImageElement | null }) => {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: panel.id });
   const { removePanel } = useProjectStore();
 
@@ -59,6 +84,9 @@ const SortablePanel = ({ panel, sceneId }: { panel: Panel, sceneId: string }) =>
         onDragStart={(e) => {
           setPanelIdOnDataTransfer(e.dataTransfer, panel.id);
           e.dataTransfer.effectAllowed = 'copy';
+          if (dragImg) {
+            e.dataTransfer.setDragImage(dragImg, 30, 20);
+          }
         }}
         onPointerDown={() => setActivePanelId(panel.id)}
       >
@@ -114,7 +142,7 @@ function blockStyle(b: ScriptSceneBlock): string {
   }
 }
 
-const SortableScene = ({ scene, activePanelId }: { scene: Scene; activePanelId: string | null }) => {
+const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; activePanelId: string | null; dragImg: HTMLImageElement | null }) => {
   const { addPanel, removeScene, reorderPanels } = useProjectStore();
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: scene.id });
 
@@ -165,7 +193,6 @@ const SortableScene = ({ scene, activePanelId }: { scene: Scene; activePanelId: 
 
   const sceneHasActivePanel = activePanelId != null && scene.panels.some((p) => p.id === activePanelId);
 
-  // We stop propagation on pointer down for the scene drag handle to not interfere with panel drag handle
   return (
     <div 
       ref={setNodeRef}
@@ -207,7 +234,7 @@ const SortableScene = ({ scene, activePanelId }: { scene: Scene; activePanelId: 
           <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={scene.panels.map(p => p.id)} strategy={verticalListSortingStrategy}>
               {scene.panels.map(panel => (
-                <SortablePanel key={panel.id} panel={panel} sceneId={scene.id} />
+                <SortablePanel key={panel.id} panel={panel} sceneId={scene.id} dragImg={dragImg} />
               ))}
             </SortableContext>
           </DndContext>
@@ -219,6 +246,11 @@ const SortableScene = ({ scene, activePanelId }: { scene: Scene; activePanelId: 
 
 export const Outliner = () => {
   const { project, addScene, reorderScenes, activePanelId, setActiveScriptPageId } = useProjectStore();
+  const dragImgRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    dragImgRef.current = createDragImage();
+  }, []);
 
   const panelScriptContext = useMemo(() => {
     if (!project || !activePanelId) return null;
@@ -351,7 +383,7 @@ export const Outliner = () => {
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleSceneDragEnd}>
             <SortableContext items={project.scenes.map(s => s.id)} strategy={verticalListSortingStrategy}>
               {project.scenes.map(scene => (
-                <SortableScene key={scene.id} scene={scene} activePanelId={activePanelId} />
+                <SortableScene key={scene.id} scene={scene} activePanelId={activePanelId} dragImg={dragImgRef.current} />
               ))}
             </SortableContext>
           </DndContext>

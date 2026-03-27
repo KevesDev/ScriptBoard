@@ -7,13 +7,13 @@ import {
   Minus, Square, Circle, Settings2, Palette,
   Brush, Pencil, PenTool, ZoomIn, ZoomOut, Maximize,
   Eye, EyeOff, ChevronUp, ChevronDown, Pipette,
-  Video
+  Video, PanelRightClose, PanelRightOpen
 } from 'lucide-react';
 import type { Layer, BrushConfig } from '@common/models';
 
 export type ToolType = 'pen' | 'eraser' | 'select' | 'line' | 'rectangle' | 'ellipse' | 'eyedropper' | 'paintbucket';
 export type BrushPreset = 'solid' | 'pencil' | 'marker' | string;
-export type BucketMode = 'layer' | 'all'; // NEW: Bucket Isolation Mode
+export type BucketMode = 'layer' | 'all'; 
 
 // --- SHARED UI COMPONENTS ---
 const ToolButton = ({ icon, active, onClick, onContextMenu, title }: { icon: React.ReactNode, active: boolean, onClick?: () => void, onContextMenu?: (e: React.MouseEvent) => void, title: string }) => (
@@ -97,11 +97,13 @@ export const StoryboardToolbar = ({
 );
 
 export const StoryboardTopBar = ({ 
-  onionSkinEnabled, setOnionSkinEnabled, zoom, setZoom, handleZoomIn, handleZoomOut, fitToScreen 
+  onionSkinEnabled, setOnionSkinEnabled, zoom, setZoom, handleZoomIn, handleZoomOut, fitToScreen,
+  isSidebarOpen, setIsSidebarOpen
 }: { 
   onionSkinEnabled: boolean; setOnionSkinEnabled: (b: boolean) => void;
   zoom: number; setZoom: (z: number) => void;
   handleZoomIn: () => void; handleZoomOut: () => void; fitToScreen: () => void;
+  isSidebarOpen: boolean; setIsSidebarOpen: (b: boolean) => void;
 }) => {
   const { undo, redo, undoStack, redoStack } = useProjectStore();
   return (
@@ -120,6 +122,16 @@ export const StoryboardTopBar = ({
         <button onClick={fitToScreen} className="p-1.5 rounded hover:bg-neutral-600 ml-1 text-neutral-400 hover:text-white" title="Fit to Screen"><Maximize size={16} /></button>
         <span className="w-10 text-right font-mono text-neutral-300">{Math.round(zoom * 100)}%</span>
       </div>
+      
+      <div className="flex-1" />
+      
+      <button 
+        onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
+        className={`p-1.5 rounded transition-colors ${isSidebarOpen ? 'bg-neutral-700 text-white' : 'hover:bg-neutral-600 text-neutral-400 hover:text-white'}`} 
+        title="Toggle Properties Panel"
+      >
+        {isSidebarOpen ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
+      </button>
     </div>
   );
 };
@@ -138,7 +150,7 @@ export const StoryboardSidebar = ({
   const { addLayer, removeLayer, setActiveLayerId, updateLayerName, toggleLayerVisibility, setLayerOpacity, moveLayerUp, moveLayerDown, updateProjectSwatches } = useProjectStore();
 
   return (
-    <div className="w-72 shrink-0 bg-[#323232] border-l border-black flex flex-col z-10 text-sm overflow-hidden">
+    <div className="w-full h-full flex flex-col bg-[#323232] text-sm overflow-hidden">
       <div className="flex flex-col border-b border-black shrink-0 max-h-[50%] overflow-y-auto custom-scrollbar">
         <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black">
           <Settings2 size={14} /> Tool Properties
