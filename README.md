@@ -1,73 +1,47 @@
-# React + TypeScript + Vite
+# ScriptBoard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A unified desktop application for animation and film professionals that combines storyboard creation with structured scriptwriting.
 
-Currently, two official plugins are available:
+## Overview
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+ScriptBoard is a standalone desktop application designed to streamline the creative workflow for screenwriters and storyboard artists. It integrates professional-grade storyboarding tools with a rich-text screenplay editor into a single project file, enabling seamless cross-referencing between script elements and visual panels.
 
-## React Compiler
+## Features
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Storyboarding Module
+- Full-featured drawing canvas with support for multiple layers per panel
+- Professional drawing tools including brushes, pencils, erasers, shapes, fill bucket, and text
+- Advanced layer management with blend modes, locking, hiding, and opacity controls
+- Drag-and-drop scene and panel organization with automatic renumbering
+- Pressure-sensitive pen and tablet input support (Windows Ink, Wacom, Huion)
+- Onion skinning for visual continuity between panels
+- Color management with color wheel, eyedropper, and custom palettes
+- Scene and project export to PNG files
 
-## Expanding the ESLint configuration
+### Scripting Module
+- Rich-text editor with support for bold, italic, colors, and lists
+- Structured directory organization with default folders (Characters, World Building, Story Structure, Drafts)
+- Drag-and-drop folder and page management
+- Built-in spellcheck and autocomplete
+- Semantic screenplay formatting with support for Scene Headings, Action, Character, Dialogue, Parenthetical, and Transition elements
+- Industry-standard screenplay import/export (Fountain format)
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+### Integration and Linking
+- Bidirectional linking between script elements and storyboard panels
+- Visual indicators showing associated script content and storyboard references
+- Drag-and-drop linking between script pages and storyboard scenes
+- Granular linking of specific dialogue and action blocks to individual panels
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Technical Stack
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+- Core Language: TypeScript
+- Desktop Framework: Electron (cross-platform native standalone executables)
+- UI Framework: React with Tailwind CSS
+- Drawing Engine: HTML5 Canvas / WebGL with Konva.js and PixiJS
+- Rich Text: TipTap
+- State Management: Zustand
+- Layout Manager: FlexLayout React
+- Audio Waveform: WaveSurfer.js
+- Graphics: ReactFlow, Perfect Freehand, D3 Contour
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Project Structure
