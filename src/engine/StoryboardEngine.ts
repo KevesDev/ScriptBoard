@@ -3,10 +3,11 @@ import { UPDATE_PRIORITY } from '@pixi/ticker';
 import { drawStampsToContainer, drawStrokeToGraphics, renderLayersIntoContainer } from './pixiStoryboardDraw';
 import { makeOnionTintFilter } from '../lib/onionSkinPixi';
 import { strokeAnyPointInRect, strokeBounds } from '../lib/storyboardClipboard';
+import { Logger } from '../lib/logger';
 import type { Stroke, Layer, BrushConfig } from '@common/models';
 
 export interface StoryboardEngineConfig {
-  canvas: HTMLCanvasElement;
+  container: HTMLDivElement;
   width: number;
   height: number;
   getBrushConfig: (presetId?: string) => BrushConfig;
@@ -39,7 +40,6 @@ export class StoryboardEngine {
 
   private onionIsolated = false;
 
-  // React-synced state
   public state = {
     tool: 'pen',
     brushPreset: 'solid',
@@ -58,7 +58,6 @@ export class StoryboardEngine {
     layerTransform: null as any,
   };
 
-  // Internal Interaction State
   private isDrawing = false;
   private activePoints: number[] = [];
   private dragStartPoint = { x: 0, y: 0 };
@@ -71,16 +70,23 @@ export class StoryboardEngine {
   };
 
   constructor(private config: StoryboardEngineConfig) {
+    Logger.info('StoryboardEngine', 'Initializing WebGL Application');
     this.app = new PIXI.Application({
-      view: config.canvas,
       width: config.width,
       height: config.height,
       backgroundAlpha: 0, 
       antialias: true,
       resolution: window.devicePixelRatio || 1,
-      autoDensity: false, // Prevents PIXI from fighting CSS transforms
+      autoDensity: false, 
       preserveDrawingBuffer: true, 
     });
+
+    const canvas = this.app.view as HTMLCanvasElement;
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.position = 'absolute';
+    canvas.style.touchAction = 'none';
+    config.container.appendChild(canvas);
 
     this.app.stage.addChild(this.scene.root);
     this.scene.root.addChild(this.scene.cameraRoot);
@@ -104,20 +110,49 @@ export class StoryboardEngine {
     window.addEventListener('pointerup', this.onPointerUp);
   }
 
+  /**
+   * CRITICAL MATH FIX: Un-projects raw Screen Space coordinates back into 
+   * Camera Local Space. If this is skipped, strokes draw off-screen when zoomed/panned.
+   */
   private getCanvasPoint(e: PointerEvent) {
     const rect = (this.app.view as HTMLCanvasElement).getBoundingClientRect();
-    const scaleX = this.config.width / rect.width;
-    const scaleY = this.config.height / rect.height;
-    return {
-      x: (e.clientX - rect.left) * scaleX,
-      y: (e.clientY - rect.top) * scaleY
-    };
+    const rawX = (e.clientX - rect.left) * (this.config.width / rect.width);
+    const rawY = (e.clientY - rect.top) * (this.config.height / rect.height);
+
+    if (!this.state.cameraTransform) return { x: rawX, y: rawY };
+
+    const cx = this.config.width / 2;
+    const cy = this.config.height / 2;
+    const px = cx + this.state.cameraTransform.panX;
+    const py = cy + this.state.cameraTransform.panY;
+    const zoom = this.state.cameraTransform.zoom;
+    const rot = (this.state.cameraTransform.rotationDeg * Math.PI) / 180;
+
+    let dx = rawX - px;
+    let dy = rawY - py;
+
+    const cosR = Math.cos(-rot);
+    const sinR = Math.sin(-rot);
+    const rx = dx * cosR - dy * sinR;
+    const ry = dx * sinR + dy * cosR;
+
+    const sx = rx / zoom;
+    const sy = ry / zoom;
+
+    return { x: sx + cx, y: sy + cy };
   }
 
   private onPointerDown = (e: PointerEvent) => {
-    if (!this.state.activePanelId || !this.state.activeLayerId) return;
+    if (!this.state.activePanelId) {
+      Logger.warn('StoryboardEngine', 'PointerDown aborted: No Active Panel.');
+      return;
+    }
+    if (!this.state.activeLayerId) {
+      Logger.warn('StoryboardEngine', 'PointerDown aborted: Active Panel has no layers selected.');
+      return;
+    }
 
-    if (e.button === 1) { // Middle click pan
+    if (e.button === 1) { 
       this.config.onPanStart(e);
       return;
     }
@@ -126,6 +161,9 @@ export class StoryboardEngine {
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
 
     const { x, y } = this.getCanvasPoint(e);
+    if (Number.isNaN(x) || Number.isNaN(y)) return;
+
+    Logger.debug('StoryboardEngine', `PointerDown at local space [${Math.round(x)}, ${Math.round(y)}] with tool: ${this.state.tool}`);
 
     if (this.state.tool === 'eyedropper') {
       const pixels = this.app.renderer.extract.pixels(this.scene.root);
@@ -146,20 +184,10 @@ export class StoryboardEngine {
       if (this.internalSelection.bounds) {
         const handleSize = 10;
         const b = this.internalSelection.bounds;
-        const handles = [
-          { type: 'tl', x: b.x, y: b.y },
-          { type: 'tr', x: b.x + b.w, y: b.y },
-          { type: 'bl', x: b.x, y: b.y + b.h },
-          { type: 'br', x: b.x + b.w, y: b.y + b.h }
-        ];
-        
+        const handles = [{ type: 'tl', x: b.x, y: b.y }, { type: 'tr', x: b.x + b.w, y: b.y }, { type: 'bl', x: b.x, y: b.y + b.h }, { type: 'br', x: b.x + b.w, y: b.y + b.h }];
         for (const h of handles) {
           if (x >= h.x - handleSize && x <= h.x + handleSize && y >= h.y - handleSize && y <= h.y + handleSize) {
-            this.internalSelection.resizeState = {
-              active: true, handle: h.type as any, scaleX: 1, scaleY: 1,
-              originX: h.type.includes('l') ? b.x + b.w : b.x,
-              originY: h.type.includes('t') ? b.y + b.h : b.y
-            };
+            this.internalSelection.resizeState = { active: true, handle: h.type as any, scaleX: 1, scaleY: 1, originX: h.type.includes('l') ? b.x + b.w : b.x, originY: h.type.includes('t') ? b.y + b.h : b.y };
             this.dragStartPoint = { x, y };
             return;
           }
@@ -177,7 +205,6 @@ export class StoryboardEngine {
       return;
     }
 
-    // Default Draw
     this.config.onSelectionChanged(new Set(), null);
     this.isDrawing = true;
     let pressure = e.pointerType === 'pen' ? (e.pressure > 0 ? e.pressure : 0.1) : 0.5;
@@ -194,27 +221,22 @@ export class StoryboardEngine {
         const dx = x - this.dragStartPoint.x;
         const dy = y - this.dragStartPoint.y;
         let newScaleX = 1, newScaleY = 1;
-
         if (this.internalSelection.resizeState.handle?.includes('r')) newScaleX = (this.internalSelection.bounds.w + dx) / this.internalSelection.bounds.w;
         if (this.internalSelection.resizeState.handle?.includes('l')) newScaleX = (this.internalSelection.bounds.w - dx) / this.internalSelection.bounds.w;
         if (this.internalSelection.resizeState.handle?.includes('b')) newScaleY = (this.internalSelection.bounds.h + dy) / this.internalSelection.bounds.h;
         if (this.internalSelection.resizeState.handle?.includes('t')) newScaleY = (this.internalSelection.bounds.h - dy) / this.internalSelection.bounds.h;
-
         if (Math.abs(newScaleX) < 0.1) newScaleX = 0.1 * Math.sign(newScaleX) || 0.1;
         if (Math.abs(newScaleY) < 0.1) newScaleY = 0.1 * Math.sign(newScaleY) || 0.1;
-
         if (e.shiftKey) {
           const avgScale = (Math.abs(newScaleX) + Math.abs(newScaleY)) / 2;
           newScaleX = avgScale * Math.sign(newScaleX);
           newScaleY = avgScale * Math.sign(newScaleY);
         }
-
         this.internalSelection.resizeState.scaleX = newScaleX;
         this.internalSelection.resizeState.scaleY = newScaleY;
         this.renderScene();
         return;
       }
-
       if (this.internalSelection.dragOffset) {
         this.internalSelection.dragOffset = { x: x - this.dragStartPoint.x, y: y - this.dragStartPoint.y };
         this.renderScene();
@@ -231,8 +253,8 @@ export class StoryboardEngine {
     const events = (e as any).getCoalescedEvents ? (e as any).getCoalescedEvents() : [e];
     for (const ev of events) {
       const { x, y } = this.getCanvasPoint(ev);
+      if (Number.isNaN(x) || Number.isNaN(y)) continue;
       let pressure = ev.pointerType === 'pen' ? (ev.pressure > 0 ? ev.pressure : 0.1) : 0.5;
-      
       if (['line', 'rectangle', 'ellipse'].includes(this.state.tool)) {
          this.activePoints = [this.activePoints[0], this.activePoints[1], this.activePoints[2], x, y, pressure];
       } else {
@@ -260,7 +282,6 @@ export class StoryboardEngine {
          if (layer && layer.strokes && maxX - minX > 5 && maxY - minY > 5) {
             const newSelected = new Set<number>();
             let sMinX = Infinity, sMaxX = -Infinity, sMinY = Infinity, sMaxY = -Infinity;
-            
             layer.strokes.forEach((stroke, i) => {
               if (!strokeAnyPointInRect(stroke, minX, maxX, minY, maxY)) return;
               newSelected.add(i);
@@ -270,7 +291,6 @@ export class StoryboardEngine {
                 sMinY = Math.min(sMinY, b.minY); sMaxY = Math.max(sMaxY, b.maxY);
               }
             });
-            
             if (newSelected.size > 0) {
                this.config.onSelectionChanged(newSelected, { x: sMinX - 10, y: sMinY - 10, w: sMaxX - sMinX + 20, h: sMaxY - sMinY + 20 });
             } else {
@@ -288,6 +308,7 @@ export class StoryboardEngine {
     this.isDrawing = false;
 
     if (this.activePoints.length >= 3) {
+      Logger.debug('StoryboardEngine', `Stroke Complete: ${this.activePoints.length / 3} coordinates passed back to Data Layer.`);
       const finalStroke: Stroke = {
         tool: this.state.tool as any,
         preset: this.state.tool === 'eraser' ? undefined : this.state.brushPreset,
@@ -315,11 +336,16 @@ export class StoryboardEngine {
 
     if (this.activePoints.length < 3) return;
 
-    // PREVENTS WEBGL CORRUPTION: Safely draw a single dot if only one point is registered
+    let colorHex = 0x000000;
+    if (this.state.color) {
+      const parsed = parseInt(this.state.color.replace('#', ''), 16);
+      if (!Number.isNaN(parsed)) colorHex = parsed;
+    }
+
     if (this.activePoints.length < 6 && !['line', 'rectangle', 'ellipse'].includes(this.state.tool)) {
       const g = this.scene.activeStrokeGraphics;
-      g.beginFill(parseInt(this.state.color.replace('#', ''), 16));
-      g.drawCircle(this.activePoints[0], this.activePoints[1], this.state.brushSize);
+      g.beginFill(colorHex);
+      g.drawCircle(this.activePoints[0] || 0, this.activePoints[1] || 0, this.state.brushSize);
       g.endFill();
       return;
     }
@@ -500,7 +526,7 @@ export class StoryboardEngine {
         }
       }
     } catch (e) {
-      console.error("Render Scene Error:", e);
+      Logger.error('StoryboardEngine', `Render Scene Error: ${e}`);
     }
   }
 
@@ -518,11 +544,17 @@ export class StoryboardEngine {
   }
 
   public destroy() {
+    Logger.info('StoryboardEngine', 'Destroying WebGL Context');
     const canvas = this.app.view as HTMLCanvasElement;
     canvas.removeEventListener('pointerdown', this.onPointerDown);
     canvas.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
     if (this.scene.onionTickerFn) this.app.ticker.remove(this.scene.onionTickerFn);
-    this.app.destroy(false, { children: true, texture: false, baseTexture: false });
+    
+    if (canvas.parentElement) {
+      canvas.parentElement.removeChild(canvas);
+    }
+    
+    this.app.destroy(true, { children: true, texture: false, baseTexture: false });
   }
 }

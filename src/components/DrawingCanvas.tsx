@@ -11,8 +11,9 @@ import { STORYBOARD_CLIPBOARD_STORAGE_KEY, parseStoryboardClipboard, serializeSt
 import { computeVectorBucketFillPaths, applyRasterBucketFromCompositeCanvas } from '../lib/vectorPaintBucket';
 import { panelLayersHaveDrawableContent, countInkPixelsInStoryboardThumbnailDataUrl } from '../lib/storyboardThumbnailSafety';
 import { shouldSuppressStoryboardCanvasGlobalKeys } from '../lib/keyboardTargets';
+import { Logger } from '../lib/logger';
 
-import { StoryboardToolbar, StoryboardTopBar, StoryboardSidebar, type ToolType, type BrushPreset } from './storyboard/StoryboardUI';
+import { StoryboardToolbar, StoryboardTopBar, StoryboardSidebar, type ToolType, type BrushPreset, type BucketMode } from './storyboard/StoryboardUI';
 
 const THUMB_MIN_INK_PIXELS = 8;
 const THUMB_EXISTING_MIN_LEN = 200;
@@ -35,8 +36,12 @@ export const DrawingCanvas = () => {
   const [showShapeMenu, setShowShapeMenu] = useState(false);
   const [isSpacePanning, setIsSpacePanning] = useState(false);
   const [onionSkinEnabled, setOnionSkinEnabled] = useState(() => preferences.onionSkin?.startEnabled ?? false);
+  
+  // NEW: Bucket UI State
+  const [bucketMode, setBucketMode] = useState<BucketMode>('all');
+  const [showBucketMenu, setShowBucketMenu] = useState(false);
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<StoryboardEngine | null>(null);
   const thumbnailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -49,7 +54,6 @@ export const DrawingCanvas = () => {
 
   const swatches = project?.swatches || ['#000000', '#ffffff', '#ff0000', '#00ff00', '#0000ff'];
 
-  // --- DERIVED TIMELINE DATA ---
   const cameraTransform = useMemo(() => project?.timeline?.cameraKeyframes?.length ? sampleCameraAtTime(timelinePlayheadSec, project.timeline.cameraKeyframes) : null, [project?.timeline?.cameraKeyframes, timelinePlayheadSec]);
   const layerTransform = useMemo(() => {
     if (!project?.timeline || !activePanelId || !activeLayerId) return null;
@@ -100,6 +104,13 @@ export const DrawingCanvas = () => {
   }, []);
 
   useEffect(() => {
+    if (activePanelId && !activeLayerId && panelLayersForCanvas.length === 0) {
+      Logger.warn('DrawingCanvas', 'Active panel contains 0 layers. Auto-generating default Vector layer.');
+      useProjectStore.getState().addLayer(activePanelId, 'vector');
+    }
+  }, [activePanelId, activeLayerId, panelLayersForCanvas.length]);
+
+  useEffect(() => {
     if (activePanelId) {
       const tryFit = () => workspaceRef.current && workspaceRef.current.clientWidth > 100 ? fitToScreen() : setTimeout(tryFit, 50);
       const timer = setTimeout(tryFit, 200); return () => clearTimeout(timer);
@@ -124,75 +135,161 @@ export const DrawingCanvas = () => {
     }, 450);
   }, [activePanelId]);
 
-  // --- ENGINE INITIALIZATION ---
+  const latestRef = useRef({ activePanelId, activeLayerId, panelLayersForCanvas, color, selectedStrokeIndices, commitHistory, updateLayerStrokes, getBrushConfig, updateThumbnail, bucketMode });
   useEffect(() => {
-    if (!canvasRef.current) return;
-    engineRef.current = new StoryboardEngine({
-      canvas: canvasRef.current, width: CANVAS_WIDTH, height: CANVAS_HEIGHT, getBrushConfig,
-      onPanStart: () => { setIsSpacePanning(true); isPanningRef.current = true; },
-      onColorPicked: (hex) => { setColor(hex); setTool('pen'); },
-      onBucketFillRequest: (x, y) => {
-        const layer = panelLayersForCanvas.find((l) => l.id === activeLayerId);
-        if (!layer || layer.locked || !activePanelId || !activeLayerId) return;
-        if (layer.type === 'vector') {
-          setTimeout(() => {
-            const L = useProjectStore.getState().project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
-            const paths = computeVectorBucketFillPaths(L!, x, y, color, CANVAS_WIDTH, CANVAS_HEIGHT, getBrushConfig);
-            if (paths?.length) { commitHistory(); updateLayerStrokes(activePanelId, activeLayerId, [...(L!.strokes || []), { tool: 'fill', color, width: 1, points: [], fillPaths: paths }]); }
-          }, 0);
-        } else {
-          const newBase64 = applyRasterBucketFromCompositeCanvas(canvasRef.current!, x, y, color, CANVAS_WIDTH, CANVAS_HEIGHT);
-          if (newBase64) { commitHistory(); useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, newBase64); }
-        }
-      },
-      onSelectionChanged: (indices, bounds) => { setSelectedStrokeIndices(indices); engineRef.current?.setSelectionBounds(bounds); },
-      onSelectionTransformComplete: (offset, rs) => {
-        const layer = useProjectStore.getState().project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
-        if (!layer || !layer.strokes) return;
-        commitHistory();
-        const newStrokes = layer.strokes.map((s, i) => {
-          if (!selectedStrokeIndices.has(i)) return s;
-          const newPoints = [];
-          if (rs.active) {
-            for (let j = 0; j < s.points.length; j += 3) newPoints.push(rs.originX + (s.points[j] - rs.originX) * rs.scaleX, rs.originY + (s.points[j+1] - rs.originY) * rs.scaleY, s.points[j+2]);
-            return { ...s, points: newPoints, width: s.width * ((Math.abs(rs.scaleX) + Math.abs(rs.scaleY)) / 2) };
-          } else if (offset) {
-            for (let j = 0; j < s.points.length; j += 3) newPoints.push(s.points[j] + offset.x, s.points[j+1] + offset.y, s.points[j+2]);
-            return { ...s, points: newPoints };
-          }
-          return s;
-        });
-        updateLayerStrokes(activePanelId!, activeLayerId!, newStrokes);
-        if (engineRef.current?.internalSelection.bounds) {
-          const b = engineRef.current.internalSelection.bounds;
-          if (offset) engineRef.current.setSelectionBounds({x: b.x + offset.x, y: b.y + offset.y, w: b.w, h: b.h});
-          else if (rs.active) engineRef.current.setSelectionBounds({ x: Math.min(rs.originX, rs.originX + (b.x - rs.originX) * rs.scaleX, rs.originX + (b.x + b.w - rs.originX) * rs.scaleX), y: Math.min(rs.originY, rs.originY + (b.y - rs.originY) * rs.scaleY, rs.originY + (b.y + b.h - rs.originY) * rs.scaleY), w: Math.abs(b.w * rs.scaleX), h: Math.abs(b.h * rs.scaleY) });
-        }
-      },
-      onStrokeComplete: (stroke) => {
-        const layer = panelLayersForCanvas.find(l => l.id === activeLayerId);
-        if (!layer || !activePanelId || !activeLayerId) return;
-        commitHistory();
-        if (layer.type === 'raster') {
-          const off = document.createElement('canvas'); off.width = CANVAS_WIDTH; off.height = CANVAS_HEIGHT;
-          const ctx = off.getContext('2d');
-          if (ctx) {
-            const drawRaster = async () => {
-              if (layer.dataBase64) { const img = new Image(); await new Promise((r) => { img.onload = r; img.src = layer.dataBase64!; }); ctx.drawImage(img, 0, 0); }
-              if (stroke.brushConfig?.textureBase64) await BrushTextureManager.getTexture(stroke.brushConfig.textureBase64, stroke.brushConfig.id);
-              renderBrushStrokeToContext(ctx, stroke, stroke.brushConfig!);
-              useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, off.toDataURL('image/png'));
+    latestRef.current = { activePanelId, activeLayerId, panelLayersForCanvas, color, selectedStrokeIndices, commitHistory, updateLayerStrokes, getBrushConfig, updateThumbnail, bucketMode };
+  });
+
+  const mountEngine = useCallback((node: HTMLDivElement | null) => {
+    if (node) {
+      if (!engineRef.current) {
+        Logger.info('DrawingCanvas', 'DOM Ready. Booting WebGL Engine...');
+        engineRef.current = new StoryboardEngine({
+          container: node,
+          width: CANVAS_WIDTH, height: CANVAS_HEIGHT, 
+          getBrushConfig: (id) => latestRef.current.getBrushConfig(id),
+          onPanStart: () => { setIsSpacePanning(true); isPanningRef.current = true; },
+          onColorPicked: (hex) => { setColor(hex); setTool('pen'); },
+          
+          // REFACTORED: Paint Bucket Current vs All Layers
+          onBucketFillRequest: (x, y) => {
+            const { activePanelId, activeLayerId, panelLayersForCanvas, color, commitHistory, updateLayerStrokes, getBrushConfig, bucketMode } = latestRef.current;
+            const layer = panelLayersForCanvas.find((l) => l.id === activeLayerId);
+            if (!layer || layer.locked || !activePanelId || !activeLayerId) return;
+
+            if (layer.type === 'vector') {
+              setTimeout(() => {
+                const L = useProjectStore.getState().project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+                try {
+                  const paths = computeVectorBucketFillPaths(L!, x, y, color, CANVAS_WIDTH, CANVAS_HEIGHT, getBrushConfig);
+                  if (paths && paths.length > 0) { 
+                    commitHistory(); 
+                    updateLayerStrokes(activePanelId, activeLayerId, [...(L!.strokes || []), { tool: 'fill', color, width: 1, points: [], fillPaths: paths }]); 
+                  } else {
+                    Logger.warn('DrawingCanvas', 'Vector fill failed to generate paths. Ensure lines form a closed loop, or switch to a Raster layer.');
+                  }
+                } catch(e) {
+                  Logger.error('DrawingCanvas', `Vector Paint Bucket crash: ${e}`);
+                }
+              }, 0);
+            } else {
+              // RASTER BUCKET FILL
+              if (bucketMode === 'all') {
+                const rawCanvas = node.querySelector('canvas');
+                if (!rawCanvas) return;
+                const newBase64 = applyRasterBucketFromCompositeCanvas(rawCanvas, x, y, color, CANVAS_WIDTH, CANVAS_HEIGHT);
+                if (newBase64) { commitHistory(); useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, newBase64); }
+              } else {
+                // ISOLATE LAYER: Render ONLY the active layer to an offscreen canvas, then flood fill it
+                const off = document.createElement('canvas'); off.width = CANVAS_WIDTH; off.height = CANVAS_HEIGHT;
+                const ctx = off.getContext('2d', { willReadFrequently: true });
+                if (ctx) {
+                  if (layer.dataBase64) {
+                    const img = new Image();
+                    img.onload = () => {
+                      ctx.drawImage(img, 0, 0);
+                      const newBase64 = applyRasterBucketFromCompositeCanvas(off, x, y, color, CANVAS_WIDTH, CANVAS_HEIGHT);
+                      if (newBase64) { commitHistory(); useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, newBase64); }
+                    };
+                    img.src = layer.dataBase64;
+                  } else {
+                    // Filling an empty layer fills the whole screen
+                    ctx.fillStyle = color; ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+                    commitHistory(); useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, off.toDataURL('image/png'));
+                  }
+                }
+              }
+            }
+          },
+
+          onSelectionChanged: (indices, bounds) => { setSelectedStrokeIndices(indices); engineRef.current?.setSelectionBounds(bounds); },
+          onSelectionTransformComplete: (offset, rs) => {
+            const { activePanelId, activeLayerId, selectedStrokeIndices, commitHistory, updateLayerStrokes } = latestRef.current;
+            const layer = useProjectStore.getState().project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+            if (!layer || !layer.strokes) return;
+            commitHistory();
+            const newStrokes = layer.strokes.map((s, i) => {
+              if (!selectedStrokeIndices.has(i)) return s;
+              const newPoints = [];
+              if (rs.active) {
+                for (let j = 0; j < s.points.length; j += 3) newPoints.push(rs.originX + (s.points[j] - rs.originX) * rs.scaleX, rs.originY + (s.points[j+1] - rs.originY) * rs.scaleY, s.points[j+2]);
+                return { ...s, points: newPoints, width: s.width * ((Math.abs(rs.scaleX) + Math.abs(rs.scaleY)) / 2) };
+              } else if (offset) {
+                for (let j = 0; j < s.points.length; j += 3) newPoints.push(s.points[j] + offset.x, s.points[j+1] + offset.y, s.points[j+2]);
+                return { ...s, points: newPoints };
+              }
+              return s;
+            });
+            updateLayerStrokes(activePanelId!, activeLayerId!, newStrokes);
+            if (engineRef.current?.internalSelection.bounds) {
+              const b = engineRef.current.internalSelection.bounds;
+              if (offset) engineRef.current.setSelectionBounds({x: b.x + offset.x, y: b.y + offset.y, w: b.w, h: b.h});
+              else if (rs.active) engineRef.current.setSelectionBounds({ x: Math.min(rs.originX, rs.originX + (b.x - rs.originX) * rs.scaleX, rs.originX + (b.x + b.w - rs.originX) * rs.scaleX), y: Math.min(rs.originY, rs.originY + (b.y - rs.originY) * rs.scaleY, rs.originY + (b.y + b.h - rs.originY) * rs.scaleY), w: Math.abs(b.w * rs.scaleX), h: Math.abs(b.h * rs.scaleY) });
+            }
+          },
+
+          // REFACTORED: Raster Shape Rendering Bypass
+          onStrokeComplete: (stroke) => {
+            const { activePanelId, activeLayerId, panelLayersForCanvas, commitHistory, updateLayerStrokes, updateThumbnail } = latestRef.current;
+            const layer = panelLayersForCanvas.find(l => l.id === activeLayerId);
+            if (!layer || !activePanelId || !activeLayerId) return;
+            commitHistory();
+
+            if (layer.type === 'raster') {
+              const off = document.createElement('canvas'); off.width = CANVAS_WIDTH; off.height = CANVAS_HEIGHT;
+              const ctx = off.getContext('2d');
+              if (ctx) {
+                const drawRaster = async () => {
+                  if (layer.dataBase64) { const img = new Image(); await new Promise((r) => { img.onload = r; img.src = layer.dataBase64!; }); ctx.drawImage(img, 0, 0); }
+                  
+                  // BYPASS: Draw pure math geometry directly to Canvas2D to prevent Freehand Tapering bug
+                  if (['line', 'rectangle', 'ellipse'].includes(stroke.tool)) {
+                    ctx.strokeStyle = stroke.color;
+                    ctx.lineWidth = stroke.width;
+                    ctx.lineCap = 'round';
+                    ctx.lineJoin = 'round';
+                    ctx.globalCompositeOperation = stroke.tool === 'eraser' ? 'destination-out' : 'source-over';
+                    
+                    if (stroke.points.length >= 6) {
+                        const x1 = stroke.points[0], y1 = stroke.points[1];
+                        const x2 = stroke.points[stroke.points.length - 3], y2 = stroke.points[stroke.points.length - 2];
+                        ctx.beginPath();
+                        if (stroke.tool === 'line') {
+                            ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+                        } else if (stroke.tool === 'rectangle') {
+                            ctx.rect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+                        } else if (stroke.tool === 'ellipse') {
+                            const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+                            const rx = Math.abs(x2 - x1) / 2, ry = Math.abs(y2 - y1) / 2;
+                            ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+                        }
+                        ctx.stroke();
+                    }
+                  } else {
+                    // Standard Organic Brushes
+                    if (stroke.brushConfig?.textureBase64) await BrushTextureManager.getTexture(stroke.brushConfig.textureBase64, stroke.brushConfig.id);
+                    renderBrushStrokeToContext(ctx, stroke, stroke.brushConfig!);
+                  }
+
+                  useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, off.toDataURL('image/png'));
+                  updateThumbnail();
+                }; drawRaster();
+              }
+            } else {
+              updateLayerStrokes(activePanelId, activeLayerId, [...(layer.strokes || []), stroke]);
               updateThumbnail();
-            }; drawRaster();
+            }
           }
-        } else {
-          updateLayerStrokes(activePanelId, activeLayerId, [...(layer.strokes || []), stroke]);
-          updateThumbnail();
-        }
+        });
       }
-    });
-    return () => { engineRef.current?.destroy(); engineRef.current = null; };
-  }, [activePanelId, activeLayerId, panelLayersForCanvas, getBrushConfig, updateLayerStrokes, commitHistory, updateThumbnail, color, selectedStrokeIndices]);
+    } else {
+      if (engineRef.current) {
+        Logger.info('DrawingCanvas', 'DOM Unmounted. Destroying WebGL Engine...');
+        engineRef.current.destroy();
+        engineRef.current = null;
+      }
+    }
+  }, []); 
 
   useEffect(() => {
     engineRef.current?.updateState({
@@ -202,7 +299,6 @@ export const DrawingCanvas = () => {
     });
   }, [tool, brushPreset, color, brushSize, activeLayerId, activePanelId, panelLayersForCanvas, onionBeforeStacks, onionAfterStacks, underlayStacks, onionSkinEnabled, onionSkinPrefs, selectedStrokeIndices, cameraTransform, layerTransform, zoom]);
 
-  // --- STATE HANDLERS ---
   const handleColorChange = (c: string) => {
     setColor(c);
     if (selectedStrokeIndices.size > 0 && activePanelId && activeLayerId) {
@@ -230,7 +326,6 @@ export const DrawingCanvas = () => {
     }
   };
 
-  // --- KEYBOARD SANDBOX ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (shouldSuppressStoryboardCanvasGlobalKeys(e)) return;
@@ -319,7 +414,13 @@ export const DrawingCanvas = () => {
   return (
     <div className="flex h-full w-full bg-[#1e1e1e] text-neutral-300 overflow-hidden select-none outline-none focus:outline-none">
       
-      <StoryboardToolbar tool={tool} setTool={setTool} activeShapeTool={activeShapeTool} setActiveShapeTool={setActiveShapeTool} showShapeMenu={showShapeMenu} setShowShapeMenu={setShowShapeMenu} />
+      <StoryboardToolbar 
+         tool={tool} setTool={setTool} 
+         activeShapeTool={activeShapeTool} setActiveShapeTool={setActiveShapeTool} 
+         showShapeMenu={showShapeMenu} setShowShapeMenu={setShowShapeMenu} 
+         bucketMode={bucketMode} setBucketMode={setBucketMode}
+         showBucketMenu={showBucketMenu} setShowBucketMenu={setShowBucketMenu}
+      />
 
       <div className="flex-1 relative flex flex-col bg-[#1e1e1e] overflow-hidden">
         
@@ -332,10 +433,11 @@ export const DrawingCanvas = () => {
            onPointerUp={() => { if (isSpacePanning) { isPanningRef.current = false; setIsSpacePanning(false); } }}
            onPointerLeave={() => { if (isSpacePanning) { isPanningRef.current = false; setIsSpacePanning(false); } }}
         >
-          {/* REMOVED bg-white to allow transparency grid to show, rely strictly on CSS scaling so PIXI buffer stays 1920x1080 */}
-          <div className="relative shrink-0 transition-all duration-75 shadow-2xl border border-neutral-600 sb-canvas-transparency-grid" style={{ width: CANVAS_WIDTH * zoom, height: CANVAS_HEIGHT * zoom }}>
-             <canvas ref={canvasRef} className="absolute inset-0 touch-none w-full h-full" style={{ cursor: isSpacePanning ? (isPanningRef.current ? 'grabbing' : 'grab') : 'crosshair' }} />
-          </div>
+          <div 
+             ref={mountEngine}
+             className="relative shrink-0 transition-all duration-75 shadow-2xl border border-neutral-600 sb-canvas-transparency-grid" 
+             style={{ width: CANVAS_WIDTH * zoom, height: CANVAS_HEIGHT * zoom, cursor: isSpacePanning ? (isPanningRef.current ? 'grabbing' : 'grab') : 'crosshair' }} 
+          />
         </div>
       </div>
 
