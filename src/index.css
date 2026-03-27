@@ -40,6 +40,28 @@ body {
 }
 
 /* Screenplay: Courier Prime (loaded from Google Fonts in index.html) */
+/* Print layout: paginated script (page breaks inserted by editor). */
+.script-print-paginated .prose > .script-page-break + * {
+  padding-top: 1in;
+}
+
+.script-page-break {
+  display: block;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  clear: both;
+  user-select: none;
+}
+
+.screenplay-editor .prose > .script-page-break::before {
+  content: "";
+  display: block;
+  margin: 0.5rem 0 0.35rem;
+  border-top: 1px dashed rgba(0, 0, 0, 0.14);
+}
+
 .screenplay-editor,
 .screenplay-editor .ProseMirror {
   font-family: "Courier Prime", Courier, "Courier New", monospace !important;
@@ -60,6 +82,29 @@ body {
 .screenplay-editor .prose p + p.parenthetical {
   margin-top: 0 !important;
   margin-block-start: 0 !important;
+  padding-left: 0 !important;
+  padding-inline-start: 0 !important;
+  text-indent: 0 !important;
+}
+
+/* Dialogue → parenthetical: strip the band that looked like a blank line above (beat). */
+.screenplay-editor .prose p.dialogue:has(+ p.parenthetical) {
+  margin-bottom: 0 !important;
+  margin-block-end: 0 !important;
+}
+.screenplay-editor .prose p.dialogue + p.parenthetical {
+  margin-top: 0 !important;
+  margin-block-start: 0 !important;
+}
+
+/* Parenthetical → dialogue: same tight stack */
+.screenplay-editor .prose p.parenthetical + p.dialogue {
+  margin-top: 0 !important;
+  margin-block-start: 0 !important;
+}
+.screenplay-editor .prose p.parenthetical:has(+ p.dialogue) {
+  margin-bottom: 0 !important;
+  margin-block-end: 0 !important;
 }
 
 .scene-heading {
@@ -85,11 +130,15 @@ body {
   margin-left: 35% !important;
 }
 
+/* Same left edge as .character so the opening ( isn’t offset with a visual “gap”. */
 .parenthetical {
   margin-top: 0 !important;
   margin-bottom: 0 !important;
-  margin-left: 28% !important;
+  margin-left: 35% !important;
   margin-right: 25% !important;
+  padding-left: 0 !important;
+  padding-inline-start: 0 !important;
+  text-indent: 0 !important;
 }
 
 .dialogue {

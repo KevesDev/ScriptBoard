@@ -1,4 +1,5 @@
 import { Node, Mark, mergeAttributes, Extension } from '@tiptap/core';
+import { Plugin } from '@tiptap/pm/state';
 
 export interface ScreenplayNodeOptions {
   HTMLAttributes: Record<string, any>;
@@ -206,6 +207,28 @@ export const Parenthetical = Node.create<ScreenplayNodeOptions>({
     return ['p', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes), 0];
   },
 
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        appendTransaction(transactions, _oldState, newState) {
+          if (!transactions.some((tr) => tr.docChanged)) return null;
+          const strips: { from: number; to: number }[] = [];
+          newState.doc.descendants((node, pos) => {
+            if (node.type.name !== 'parenthetical' || !node.isTextblock) return;
+            const text = node.textContent;
+            const m = /^[\s\u00a0]+/.exec(text);
+            if (m) strips.push({ from: pos + 1, to: pos + 1 + m[0].length });
+          });
+          if (strips.length === 0) return null;
+          strips.sort((a, b) => b.from - a.from);
+          let tr = newState.tr;
+          for (const { from, to } of strips) tr = tr.delete(from, to);
+          return tr;
+        },
+      }),
+    ];
+  },
+
   addKeyboardShortcuts() {
     return {
       'Enter': ({ editor }) => {
@@ -217,6 +240,34 @@ export const Parenthetical = Node.create<ScreenplayNodeOptions>({
       },
     };
   }
+});
+
+/** Automatic pagination inserts this between blocks in print layout (US Letter body height). */
+export const PageBreak = Node.create<ScreenplayNodeOptions>({
+  name: 'pageBreak',
+  group: 'block',
+  atom: true,
+  selectable: false,
+  draggable: false,
+
+  addOptions() {
+    return {
+      HTMLAttributes: {
+        class: 'script-page-break',
+        'data-type': 'pageBreak',
+        'data-page-break': '',
+        contenteditable: 'false',
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: 'div[data-page-break]' }, { tag: 'div[data-type="pageBreak"]' }];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ['div', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)];
+  },
 });
 
 // Transition

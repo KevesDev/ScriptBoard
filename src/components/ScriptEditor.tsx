@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useEffect, useRef, useCallback, useMemo, useState } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { TextStyle } from '@tiptap/extension-text-style';
@@ -25,7 +25,19 @@ import {
 import { useProjectStore } from '../store/projectStore';
 import { useAppStore } from '../store/appStore';
 import type { ScriptFolder, ScriptPage } from '@common/models';
-import { SceneHeading, Action, Character, Dialogue, Parenthetical, Transition, ScreenplayShortcuts, ScreenplayDefaultEnter, CommentMark } from '../tiptap/ScreenplayNodes';
+import {
+  SceneHeading,
+  Action,
+  Character,
+  Dialogue,
+  Parenthetical,
+  Transition,
+  PageBreak,
+  ScreenplayShortcuts,
+  ScreenplayDefaultEnter,
+  CommentMark,
+} from '../tiptap/ScreenplayNodes';
+import { ScreenplayPagination } from '../tiptap/ScreenplayPagination';
 import { ScreenplayTabCycle } from '../tiptap/ScreenplayTabCycle';
 import { handleScreenplayAutoCapitalize, ScreenplaySentenceCapState } from '../lib/screenplayAutoCapitalize';
 import {
@@ -35,6 +47,22 @@ import {
   scheduleReturnFocusToProseMirror,
 } from '../lib/focusAfterNativeDialog';
 import { base64ToUtf8Text, utf8TextToBase64 } from '../lib/scriptContentBase64';
+
+/** US Letter height in CSS px (96px per inch). */
+const US_LETTER_PAGE_CSS_PX = 96 * 11;
+
+/** Vertical center (px from top of paper) for each page number in the print gutter. */
+function printPageMarkerCenters(totalHeightPx: number): { num: number; top: number }[] {
+  const h = Math.max(0, totalHeightPx);
+  const n = Math.max(1, Math.ceil(h / US_LETTER_PAGE_CSS_PX));
+  const markers: { num: number; top: number }[] = [];
+  for (let i = 0; i < n; i++) {
+    const bandTop = i * US_LETTER_PAGE_CSS_PX;
+    const bandBottom = Math.min((i + 1) * US_LETTER_PAGE_CSS_PX, h);
+    markers.push({ num: i + 1, top: (bandTop + bandBottom) / 2 });
+  }
+  return markers;
+}
 
 /** Scene titles in document order from stored TipTap JSON (for link picker on other pages). */
 function getSceneTitlesFromStoredContent(contentBase64: string): string[] {
@@ -237,7 +265,13 @@ const MenuBar = ({
 export const ScriptEditor: React.FC = () => {
   const { project, activeScriptPageId, setActiveScriptPageId, updateScriptPageContent, addPageToFolder, removeNode, updateNodeName, updateProjectSettings, updateProjectName } = useProjectStore();
   const { preferences } = useAppStore();
-  
+  const scriptLayout = preferences.scriptSettings?.layout ?? 'print';
+  const paginationEnabledRef = useRef(scriptLayout === 'print');
+  paginationEnabledRef.current = scriptLayout === 'print';
+  const paperRef = useRef<HTMLDivElement>(null);
+  /** Measured paper `scrollHeight`; drives gutter page numbers in print layout. */
+  const [paperScrollHeight, setPaperScrollHeight] = useState(US_LETTER_PAGE_CSS_PX);
+
   const [activeRightTab, setActiveRightTab] = React.useState<'outline' | 'documents' | 'info' | 'notes' | 'comments'>('documents');
   const [editingTabId, setEditingTabId] = React.useState<string | null>(null);
   const [editingTabName, setEditingTabName] = React.useState('');
@@ -377,21 +411,9 @@ export const ScriptEditor: React.FC = () => {
     [preferences.scriptSettings?.autoCapitalizeFirstLetter],
   );
 
-  const updateOutline = (editorInstance: any) => {
-    if (!editorInstance) return;
-    const items: {id: string, title: string, pos: number}[] = [];
-    editorInstance.state.doc.descendants((node: any, pos: number) => {
-      if (node.type.name === 'sceneHeading') {
-        items.push({ id: pos.toString(), title: node.textContent || 'Empty Scene', pos });
-      }
-    });
-    setOutlineItems(items);
-  };
-
-  const editor = useEditor(
-    {
-    extensions: [
-      Action, // Action is first, so it becomes the default block node for the Document!
+  const scriptEditorExtensions = useMemo(
+    () => [
+      Action,
       StarterKit,
       Underline,
       TextStyle,
@@ -420,10 +442,33 @@ export const ScriptEditor: React.FC = () => {
       Dialogue,
       Parenthetical,
       Transition,
+      PageBreak,
+      ScreenplayPagination.configure({
+        getEnabled: () => paginationEnabledRef.current,
+        getDefer: () => loadingPageContentRef.current,
+        pageBodyHeightPx: 96 * 9,
+      }),
       ScreenplayTabCycle,
       ScreenplayDefaultEnter,
       CommentMark,
     ],
+    [],
+  );
+
+  const updateOutline = (editorInstance: any) => {
+    if (!editorInstance) return;
+    const items: {id: string, title: string, pos: number}[] = [];
+    editorInstance.state.doc.descendants((node: any, pos: number) => {
+      if (node.type.name === 'sceneHeading') {
+        items.push({ id: pos.toString(), title: node.textContent || 'Empty Scene', pos });
+      }
+    });
+    setOutlineItems(items);
+  };
+
+  const editor = useEditor(
+    {
+    extensions: scriptEditorExtensions,
     /** Shell only; page JSON/HTML is applied in the sync effect so `content` is not a new object every Zustand update. */
     content: '<p class="action"></p>',
     editable: true,
@@ -507,6 +552,42 @@ export const ScriptEditor: React.FC = () => {
     editorRef.current = editor;
   }, [editor]);
 
+  const recalcPaperMetrics = useCallback(() => {
+    if (scriptLayout !== 'print') return;
+    const el = paperRef.current;
+    if (!el) return;
+    setPaperScrollHeight(el.scrollHeight);
+  }, [scriptLayout]);
+
+  useEffect(() => {
+    recalcPaperMetrics();
+  }, [recalcPaperMetrics, activeScriptPageId, scriptLayout]);
+
+  useEffect(() => {
+    if (scriptLayout !== 'print') return;
+    const el = paperRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => recalcPaperMetrics());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [scriptLayout, recalcPaperMetrics]);
+
+  useEffect(() => {
+    if (!editor || scriptLayout !== 'print') return;
+    const run = () => requestAnimationFrame(() => recalcPaperMetrics());
+    editor.on('update', run);
+    editor.on('transaction', run);
+    return () => {
+      editor.off('update', run);
+      editor.off('transaction', run);
+    };
+  }, [editor, scriptLayout, recalcPaperMetrics]);
+
+  const printGutterMarkers = useMemo(
+    () => (scriptLayout === 'print' ? printPageMarkerCenters(paperScrollHeight) : []),
+    [scriptLayout, paperScrollHeight],
+  );
+
   useEffect(() => {
     const fixEditable = () => {
       queueMicrotask(() => {
@@ -568,6 +649,15 @@ export const ScriptEditor: React.FC = () => {
       }
     }
 
+    queueMicrotask(() => {
+      const ed = editor;
+      if (!ed || ed.isDestroyed) return;
+      const layout = useAppStore.getState().preferences.scriptSettings?.layout ?? 'print';
+      if (layout === 'print') {
+        ed.commands.repaginateScript();
+      }
+    });
+
     const pending = pendingCardNavRef.current;
     if (editor && activeScriptPageId && pending && pending.pageId === activeScriptPageId) {
       pendingCardNavRef.current = null;
@@ -597,6 +687,15 @@ export const ScriptEditor: React.FC = () => {
       });
     }
   }, [activeScriptPageId, editor, project?.id]); // `project.id` only — avoids reload loops on content edits
+
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    if (scriptLayout === 'print') {
+      editor.commands.repaginateScript();
+    } else {
+      editor.commands.stripScriptPageBreaks();
+    }
+  }, [scriptLayout, editor]);
 
   navigateInternalScriptHrefRef.current = (href: string) => {
     if (!href) return;
@@ -653,6 +752,50 @@ export const ScriptEditor: React.FC = () => {
       });
     }, ok ? 120 : 0);
   };
+
+  const scriptPaperStyle = {
+    '--script-font-size': `${preferences.scriptSettings?.fontSize || 14}px`,
+  } as React.CSSProperties;
+
+  const scriptPaperClass =
+    scriptLayout === 'print'
+      ? 'min-h-[11in] w-full max-w-[8.5in] flex-1 rounded-sm bg-[#ffffff] text-black shadow-2xl screenplay-editor script-print-paginated'
+      : 'mx-auto min-h-[1100px] max-w-[850px] bg-[#ffffff] text-black shadow-2xl screenplay-editor';
+
+  const scriptPaperEl = (
+    <div
+      ref={paperRef}
+      className={scriptPaperClass}
+      style={scriptPaperStyle}
+      onPointerDownCapture={(e) => {
+        const a = (e.target as HTMLElement).closest('a');
+        const raw = a?.getAttribute('href');
+        if (raw?.startsWith('script-card:') || raw?.startsWith('script-page:')) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+      onAuxClickCapture={(e) => {
+        if (e.button !== 1) return;
+        const a = (e.target as HTMLElement).closest('a');
+        const raw = a?.getAttribute('href');
+        if (raw?.startsWith('script-card:') || raw?.startsWith('script-page:')) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+      onClickCapture={(e) => {
+        const a = (e.target as HTMLElement).closest('a');
+        const raw = a?.getAttribute('href') || '';
+        if (!raw.startsWith('script-card:') && !raw.startsWith('script-page:')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        navigateInternalScriptHrefRef.current(raw);
+      }}
+    >
+      <EditorContent editor={editor} className="h-full cursor-text py-[1in] px-[1in]" />
+    </div>
+  );
 
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e] text-neutral-200 overflow-hidden font-sans">
@@ -735,7 +878,11 @@ export const ScriptEditor: React.FC = () => {
         
         {/* Main Editor Area */}
         <div 
-          className="flex-1 overflow-y-auto p-12 bg-[#151515] border-l border-r border-black shadow-inner"
+          className={
+            scriptLayout === 'print'
+              ? 'flex-1 overflow-y-auto p-8 bg-zinc-600 border-l border-r border-black shadow-inner'
+              : 'flex-1 overflow-y-auto p-12 bg-[#151515] border-l border-r border-black shadow-inner'
+          }
           onMouseDown={(e) => {
             const el = e.target as HTMLElement;
             const inEditor = el.closest('.ProseMirror, [contenteditable="true"]');
@@ -781,37 +928,25 @@ export const ScriptEditor: React.FC = () => {
             else if (combo === (prefs.scriptTransition || 'ctrl+6')) { e.preventDefault(); editor?.commands.setNode('transition'); }
           }}
         >
-          <div 
-            className="max-w-[850px] mx-auto min-h-[1100px] bg-[#ffffff] text-black shadow-2xl screenplay-editor"
-            style={{ '--script-font-size': `${preferences.scriptSettings?.fontSize || 14}px` } as React.CSSProperties}
-            onPointerDownCapture={(e) => {
-              const a = (e.target as HTMLElement).closest('a');
-              const raw = a?.getAttribute('href');
-              if (raw?.startsWith('script-card:') || raw?.startsWith('script-page:')) {
-                e.preventDefault();
-                e.stopPropagation();
-              }
-            }}
-            onAuxClickCapture={(e) => {
-              if (e.button !== 1) return;
-              const a = (e.target as HTMLElement).closest('a');
-              const raw = a?.getAttribute('href');
-              if (raw?.startsWith('script-card:') || raw?.startsWith('script-page:')) {
-                e.preventDefault();
-                e.stopPropagation();
-              }
-            }}
-            onClickCapture={(e) => {
-              const a = (e.target as HTMLElement).closest('a');
-              const raw = a?.getAttribute('href') || '';
-              if (!raw.startsWith('script-card:') && !raw.startsWith('script-page:')) return;
-              e.preventDefault();
-              e.stopPropagation();
-              navigateInternalScriptHrefRef.current(raw);
-            }}
-          >
-             <EditorContent editor={editor} className="h-full cursor-text py-[1in] px-[1in]" />
-          </div>
+          {scriptLayout === 'print' ? (
+            <div className="mx-auto flex w-full max-w-[calc(8.5in+3.5rem)] items-start justify-center gap-2 sm:gap-3">
+              <div className="relative w-9 shrink-0 select-none sm:w-11" style={{ height: paperScrollHeight }}>
+                {printGutterMarkers.map(({ num, top }) => (
+                  <span
+                    key={num}
+                    className="absolute right-0 text-[1.65rem] font-light leading-none tracking-tight text-zinc-300 sm:text-3xl"
+                    style={{ top: `${top}px`, transform: 'translateY(-50%)' }}
+                    aria-label={`Script page ${num}`}
+                  >
+                    {num}
+                  </span>
+                ))}
+              </div>
+              {scriptPaperEl}
+            </div>
+          ) : (
+            scriptPaperEl
+          )}
         </div>
 
         {/* Right sidebar: resizable width; scroll tab row so Comments stays reachable */}

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAppStore } from '../store/appStore';
+import { useAppStore, type ScriptEditorLayout } from '../store/appStore';
 import { useProjectStore } from '../store/projectStore';
 import { IPC_CHANNELS } from '@common/ipc';
 import { nativeAlert } from '../lib/focusAfterNativeDialog';
@@ -538,11 +538,53 @@ export const Preferences = () => {
                       <span>
                         <span className="text-sm font-medium text-neutral-200">Auto-capitalize in Action & Dialogue</span>
                         <span className="mt-1 block text-xs text-neutral-500">
-                          Uppercases the first letter of a new line and the first letter after a period + space. If you change a
+                          Uppercases the first letter of a new line and the first letter after a sentence end (. ! ?) followed by a
+                          space. If you change a
                           letter to lowercase (typing or selection), it will not be forced back to uppercase.
                         </span>
                       </span>
                     </label>
+                  </div>
+
+                  <div className="rounded-xl border border-neutral-800 bg-[#1a1a1a] p-4">
+                    <div className="mb-3 text-sm font-medium text-neutral-200">Layout</div>
+                    <p className="mb-3 text-xs text-neutral-500">
+                      Print pages automatically inserts page breaks so each page fits roughly US Letter body text (9″ tall between 1″
+                      top/bottom margins). Page numbers sit in the left gutter. Very long single blocks are not split mid-paragraph.
+                      Continuous is one long sheet (previous default look).
+                    </p>
+                    <div className="flex flex-col gap-2">
+                      {(
+                        [
+                          { id: 'print' as const, label: 'Print pages', sub: '8.5″ width, auto page breaks, gutter numbers' },
+                          { id: 'continuous' as const, label: 'Continuous', sub: 'Single scroll, dark margins' },
+                        ] satisfies { id: ScriptEditorLayout; label: string; sub: string }[]
+                      ).map((opt) => (
+                        <label
+                          key={opt.id}
+                          className="flex cursor-pointer items-start gap-3 rounded-lg border border-neutral-800 bg-neutral-900/40 p-3 has-[:checked]:border-blue-600/50 has-[:checked]:bg-blue-950/20"
+                        >
+                          <input
+                            type="radio"
+                            name="script-layout"
+                            className="mt-0.5 h-4 w-4 shrink-0 border-neutral-600 bg-neutral-900 accent-blue-600"
+                            checked={(preferences.scriptSettings?.layout ?? 'print') === opt.id}
+                            onChange={() =>
+                              setPreferences({
+                                scriptSettings: {
+                                  ...(preferences.scriptSettings || {}),
+                                  layout: opt.id,
+                                },
+                              })
+                            }
+                          />
+                          <span>
+                            <span className="text-sm font-medium text-neutral-200">{opt.label}</span>
+                            <span className="mt-0.5 block text-xs text-neutral-500">{opt.sub}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
                   </div>
 
                   <div className="rounded-xl border border-neutral-800 bg-[#1a1a1a] p-4">

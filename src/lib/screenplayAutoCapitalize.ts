@@ -6,6 +6,17 @@ import { Extension } from '@tiptap/core';
 
 const SCREENPLAY_CAP_BLOCKS = new Set(['action', 'dialogue']);
 
+/** `. `, `! `, or `? ` before a letter — same gap we capitalize after (unless suppressed). */
+const SENTENCE_BOUNDARY_GAPS = new Set(['. ', '! ', '? ']);
+
+function isSentenceBoundaryGap(t: string, i: number): boolean {
+  if (i + 2 >= t.length) return false;
+  const p = t[i];
+  if (p !== '.' && p !== '!' && p !== '?') return false;
+  if (t[i + 1] !== ' ') return false;
+  return /[a-zA-Z]/.test(t[i + 2]!);
+}
+
 export const screenplaySentenceCapKey = new PluginKey<{ suppressed: Set<number> }>('screenplaySentenceCap');
 
 function remapSuppressed(set: Set<number>, tr: Transaction): Set<number> {
@@ -42,11 +53,11 @@ function textOffsetToAbsInBlock(blockPos: number, parent: PMNode, textOffset: nu
   return found;
 }
 
-function letterAbsPositionsAfterPeriod(blockPos: number, node: PMNode): number[] {
+function letterAbsPositionsAfterSentenceGap(blockPos: number, node: PMNode): number[] {
   const out: number[] = [];
   const t = node.textContent;
   for (let i = 0; i <= t.length - 3; i++) {
-    if (t[i] === '.' && t[i + 1] === ' ' && /[a-zA-Z]/.test(t[i + 2])) {
+    if (isSentenceBoundaryGap(t, i)) {
       const abs = textOffsetToAbsInBlock(blockPos, node, i + 2);
       if (abs != null) out.push(abs);
     }
@@ -64,7 +75,7 @@ function addSuppressionsWhenUserLowercased(
   const inv = tr.mapping.invert();
   newState.doc.descendants((node, pos) => {
     if (!SCREENPLAY_CAP_BLOCKS.has(node.type.name) || !node.isTextblock) return;
-    for (const absNew of letterAbsPositionsAfterPeriod(pos, node)) {
+    for (const absNew of letterAbsPositionsAfterSentenceGap(pos, node)) {
       let absOld: number;
       try {
         absOld = inv.map(absNew);
@@ -82,8 +93,8 @@ function addSuppressionsWhenUserLowercased(
   return next;
 }
 
-/** After removing an uppercase letter right after ". ", remember the gap so the next typed letter is not forced uppercase. */
-function addSuppressionsWhenCapitalRemovedAfterPeriod(
+/** After removing an uppercase letter right after ". "!/"? ", remember the gap so the next typed letter is not forced uppercase. */
+function addSuppressionsWhenCapitalRemovedAfterSentenceGap(
   oldState: EditorState,
   tr: Transaction,
   suppressed: Set<number>,
@@ -122,10 +133,12 @@ function addSuppressionsWhenCapitalRemovedAfterPeriod(
       }
     }
     if (diff < 2) return;
-    if (ot[diff - 2] === '.' && ot[diff - 1] === ' ' && /[A-Z]/.test(ot[diff]!)) {
-      const abs = textOffsetToAbsInBlock(mappedPos, newNode, diff);
-      if (abs != null) next.add(abs);
-    }
+    const punct = ot[diff - 2];
+    if (punct !== '.' && punct !== '!' && punct !== '?') return;
+    if (ot[diff - 1] !== ' ') return;
+    if (!/[A-Z]/.test(ot[diff]!)) return;
+    const abs = textOffsetToAbsInBlock(mappedPos, newNode, diff);
+    if (abs != null) next.add(abs);
   });
   return next;
 }
@@ -141,7 +154,7 @@ function createSentenceCapPlugin() {
         let suppressed = remapSuppressed(value.suppressed, tr);
         if (tr.docChanged) {
           suppressed = addSuppressionsWhenUserLowercased(oldState, newState, tr, suppressed);
-          suppressed = addSuppressionsWhenCapitalRemovedAfterPeriod(oldState, tr, suppressed);
+          suppressed = addSuppressionsWhenCapitalRemovedAfterSentenceGap(oldState, tr, suppressed);
         }
         return { suppressed };
       },
@@ -150,7 +163,7 @@ function createSentenceCapPlugin() {
 }
 
 /**
- * Tracks sentence-boundary positions where the user chose lowercase after a period
+ * Tracks sentence-boundary positions where the user chose lowercase after `. ` / `! ` / `? `
  * (e.g. replaced auto-capitalized text). Must be included in the editor extensions.
  */
 export const ScreenplaySentenceCapState = Extension.create({
@@ -160,7 +173,7 @@ export const ScreenplaySentenceCapState = Extension.create({
   },
 });
 
-function trySentenceAfterPeriod(
+function trySentenceAfterPunctuation(
   view: EditorView,
   from: number,
   to: number,
@@ -176,7 +189,7 @@ function trySentenceAfterPeriod(
   const blockStart = $from.start(depth);
   if (from - 2 < blockStart) return false;
   const before = state.doc.textBetween(from - 2, from);
-  if (before !== '. ') return false;
+  if (!SENTENCE_BOUNDARY_GAPS.has(before)) return false;
 
   const suppressed = screenplaySentenceCapKey.getState(state)?.suppressed;
   if (suppressed?.has(from)) return false;
@@ -211,8 +224,8 @@ function tryBlockStart(view: EditorView, from: number, to: number, text: string)
 
 /**
  * Capitalize the first typed character at the start of an action/dialogue block,
- * and the first character after ". " when the user types at that gap (unless they
- * previously forced lowercase at that sentence boundary).
+ * and the first character after ". " / "! " / "? " when the user types at that gap
+ * (unless they previously forced lowercase at that sentence boundary).
  */
 export function handleScreenplayAutoCapitalize(
   view: EditorView,
@@ -221,7 +234,7 @@ export function handleScreenplayAutoCapitalize(
   text: string,
 ): boolean {
   if (!text) return false;
-  if (trySentenceAfterPeriod(view, from, to, text)) return true;
+  if (trySentenceAfterPunctuation(view, from, to, text)) return true;
   if (tryBlockStart(view, from, to, text)) return true;
   return false;
 }

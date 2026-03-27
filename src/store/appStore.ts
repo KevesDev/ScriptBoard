@@ -7,6 +7,9 @@ import brushPencilUrl from '../assets/Brush_Pencil.png';
 import brushMarkerUrl from '../assets/Brush_Marker.png';
 import brushAirbrushUrl from '../assets/Brush_Airbrush.png';
 
+/** Script editor canvas: print-style page guides vs one long scroll. */
+export type ScriptEditorLayout = 'print' | 'continuous';
+
 export interface OnionSkinPreferences {
   /** Panels to show before the current (same scene), 0–5 */
   panelsBefore: number;
@@ -53,6 +56,8 @@ export interface AppPreferences {
     fontSize: number;
     /** When true, first typed letter at the start of Action / Dialogue lines is uppercased. */
     autoCapitalizeFirstLetter: boolean;
+    /** Default `print`: US Letter layout, auto page breaks + gutter numbers; `continuous`: single long page. */
+    layout: ScriptEditorLayout;
   };
   onionSkin: OnionSkinPreferences;
   /** Project file backups & autosave (renderer + Electron main). */
@@ -153,6 +158,7 @@ const defaultPreferences: AppPreferences = {
   scriptSettings: {
     fontSize: 14,
     autoCapitalizeFirstLetter: true,
+    layout: 'print',
   },
   onionSkin: {
     panelsBefore: 1,
