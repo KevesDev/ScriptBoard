@@ -483,96 +483,8 @@ export const Timeline: React.FC = () => {
     [project, pxPerSec, timelineDuration, snapTime, flatPanels, commitHistory, addStoryboardClip],
   );
 
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      const d = dragRef.current;
-      if (d?.kind === 'clip-slip') {
-        const dx = (e.clientX - d.startX) / pxPerSec;
-        const trim = d.origTrim + dx;
-        if (d.trackKind === 'video') {
-          slipTimelineVideoClipToTrim(d.trackIndex, d.clipId, trim);
-        } else {
-          slipTimelineAudioClipToTrim(d.trackIndex, d.clipId, trim);
-        }
-        return;
-      }
-      if (d?.kind === 'clip-move') {
-        const dx = (e.clientX - d.startX) / pxPerSec;
-        const t = snapTime(Math.max(0, d.origStart + dx));
-        if (d.trackKind === 'video') {
-          moveTimelineVideoClip(d.trackIndex, d.clipId, t);
-        } else {
-          moveTimelineAudioClip(d.trackIndex, d.clipId, t);
-        }
-        return;
-      }
-      if (d?.kind === 'clip-resize') {
-        const dx = (e.clientX - d.startX) / pxPerSec;
-        const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
-        if (d.trackKind === 'video') {
-          resizeTimelineVideoClip(d.trackIndex, d.clipId, d.edge, tLine);
-        } else {
-          resizeTimelineAudioClip(d.trackIndex, d.clipId, d.edge, tLine);
-        }
-        return;
-      }
-      if (d?.kind === 'cam-kf-move') {
-        const dx = (e.clientX - d.startX) / pxPerSec;
-        moveTimelineCameraKeyframe(d.id, snapTime(Math.max(0, d.origT + dx)));
-        return;
-      }
-      if (d?.kind === 'layer-kf-move') {
-        const dx = (e.clientX - d.startX) / pxPerSec;
-        moveTimelineLayerKeyframe(d.id, snapTime(Math.max(0, d.origT + dx)));
-        return;
-      }
-      if (d?.kind === 'sb-clip-move') {
-        const dx = (e.clientX - d.startX) / pxPerSec;
-        moveStoryboardClip(d.trackId, d.clipId, snapTime(Math.max(0, d.origStart + dx)));
-        return;
-      }
-      if (d?.kind === 'sb-clip-resize') {
-        const dx = (e.clientX - d.startX) / pxPerSec;
-        const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
-        resizeStoryboardClip(d.trackId, d.clipId, d.edge, tLine);
-        return;
-      }
-
-      if (!draggingPlayhead.current || !scrollRef.current) return;
-      const el = scrollRef.current;
-      const rect = el.getBoundingClientRect();
-      const x = e.clientX - rect.left + el.scrollLeft;
-      let t = x / pxPerSec;
-      t = snapTime(Math.max(0, Math.min(t, timelineDuration)));
-      setCurrentTime(t);
-      syncAudioRef.current(t, audioScrubbing);
-      const pSt = useProjectStore.getState().project;
-      const top = pSt ? getTopStoryboardPanelIdAtTime(pSt, t) : null;
-      const fp = flatPanelsRef.current.find((x) => t >= x.startTime && t < x.endTime);
-      const id = top ?? fp?.id;
-      if (id) setActivePanelId(id);
-    };
-
-    const onUp = (e: PointerEvent) => {
-      // AAA FIX: Explicitly release capture before cleaning up state
-      if (e.target instanceof Element) {
-        try {
-          e.target.releasePointerCapture(e.pointerId);
-        } catch (err) {}
-      }
-
-      draggingPlayhead.current = false;
-      dragRef.current = null;
-      if (!isPlaying) syncAudioRef.current(currentTimeRef.current, false);
-    };
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp, { capture: true });
-    return () => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp, { capture: true });
-    };
-  }, [
+  // FIX 2: Store stable references so the mouse events don't disconnect when React re-renders
+  const latestRef = useRef({
     pxPerSec,
     timelineDuration,
     snapTime,
@@ -589,7 +501,124 @@ export const Timeline: React.FC = () => {
     moveStoryboardClip,
     resizeStoryboardClip,
     isPlaying,
-  ]);
+    syncAudioToTime: syncAudioRef.current
+  });
+
+  useEffect(() => {
+    latestRef.current = {
+      pxPerSec,
+      timelineDuration,
+      snapTime,
+      setActivePanelId,
+      audioScrubbing,
+      moveTimelineAudioClip,
+      moveTimelineVideoClip,
+      resizeTimelineAudioClip,
+      resizeTimelineVideoClip,
+      slipTimelineAudioClipToTrim,
+      slipTimelineVideoClipToTrim,
+      moveTimelineCameraKeyframe,
+      moveTimelineLayerKeyframe,
+      moveStoryboardClip,
+      resizeStoryboardClip,
+      isPlaying,
+      syncAudioToTime: syncAudioRef.current
+    };
+  });
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current;
+      const lr = latestRef.current;
+
+      if (d?.kind === 'clip-slip') {
+        const dx = (e.clientX - d.startX) / lr.pxPerSec;
+        const trim = d.origTrim + dx;
+        if (d.trackKind === 'video') {
+          lr.slipTimelineVideoClipToTrim(d.trackIndex, d.clipId, trim);
+        } else {
+          lr.slipTimelineAudioClipToTrim(d.trackIndex, d.clipId, trim);
+        }
+        return;
+      }
+      if (d?.kind === 'clip-move') {
+        const dx = (e.clientX - d.startX) / lr.pxPerSec;
+        const t = lr.snapTime(Math.max(0, d.origStart + dx));
+        if (d.trackKind === 'video') {
+          lr.moveTimelineVideoClip(d.trackIndex, d.clipId, t);
+        } else {
+          lr.moveTimelineAudioClip(d.trackIndex, d.clipId, t);
+        }
+        return;
+      }
+      if (d?.kind === 'clip-resize') {
+        const dx = (e.clientX - d.startX) / lr.pxPerSec;
+        const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
+        if (d.trackKind === 'video') {
+          lr.resizeTimelineVideoClip(d.trackIndex, d.clipId, d.edge, tLine);
+        } else {
+          lr.resizeTimelineAudioClip(d.trackIndex, d.clipId, d.edge, tLine);
+        }
+        return;
+      }
+      if (d?.kind === 'cam-kf-move') {
+        const dx = (e.clientX - d.startX) / lr.pxPerSec;
+        lr.moveTimelineCameraKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx)));
+        return;
+      }
+      if (d?.kind === 'layer-kf-move') {
+        const dx = (e.clientX - d.startX) / lr.pxPerSec;
+        lr.moveTimelineLayerKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx)));
+        return;
+      }
+      if (d?.kind === 'sb-clip-move') {
+        const dx = (e.clientX - d.startX) / lr.pxPerSec;
+        lr.moveStoryboardClip(d.trackId, d.clipId, lr.snapTime(Math.max(0, d.origStart + dx)));
+        return;
+      }
+      if (d?.kind === 'sb-clip-resize') {
+        const dx = (e.clientX - d.startX) / lr.pxPerSec;
+        const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
+        lr.resizeStoryboardClip(d.trackId, d.clipId, d.edge, tLine);
+        return;
+      }
+
+      if (!draggingPlayhead.current || !scrollRef.current) return;
+      const el = scrollRef.current;
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left + el.scrollLeft;
+      let t = x / lr.pxPerSec;
+      t = lr.snapTime(Math.max(0, Math.min(t, lr.timelineDuration)));
+      setCurrentTime(t);
+      lr.syncAudioToTime(t, lr.audioScrubbing);
+      const pSt = useProjectStore.getState().project;
+      const top = pSt ? getTopStoryboardPanelIdAtTime(pSt, t) : null;
+      const fp = flatPanelsRef.current.find((x) => t >= x.startTime && t < x.endTime);
+      const id = top ?? fp?.id;
+      if (id) lr.setActivePanelId(id);
+    };
+
+    const onUp = (e: PointerEvent) => {
+      // FIX 3: Hardware capture release guarantees no sticking mouse
+      if (e.target instanceof Element) {
+        try {
+          e.target.releasePointerCapture(e.pointerId);
+        } catch (err) {}
+      }
+      draggingPlayhead.current = false;
+      dragRef.current = null;
+      if (!latestRef.current.isPlaying) latestRef.current.syncAudioToTime(currentTimeRef.current, false);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp, { capture: true });
+    window.addEventListener('pointercancel', onUp, { capture: true });
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp, { capture: true });
+      window.removeEventListener('pointercancel', onUp, { capture: true });
+    };
+  }, []); // Empty dependency array prevents listener tear-down
 
   const rulerTicks = useMemo(() => {
     const ticks: { x: number; label: string; major: boolean }[] = [];
@@ -617,119 +646,6 @@ export const Timeline: React.FC = () => {
   const trackHeaderBtn = 'p-0.5 rounded text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800';
   const transportBtn =
     'rounded p-1.5 text-neutral-300 transition-colors hover:bg-neutral-700 disabled:pointer-events-none disabled:opacity-40';
-
-  const handlePlayPause = () => setIsPlaying((p) => !p);
-
-  const handleImportAudio = async () => {
-    if (!window.ipcRenderer || !project?.timeline) return;
-    try {
-      const res: IpcResponse<{ dataUri: string; fileName: string }> = await window.ipcRenderer.invoke(
-        IPC_CHANNELS.AUDIO_IMPORT,
-      );
-      if (!res.success || !res.data) return;
-      const buf = await decodeAudioFromDataUri(res.data.dataUri);
-      const full = buf.duration;
-      const peaks = downsamplePeaks(buf, 600);
-      const clip: TimelineAudioClip = {
-        id: crypto.randomUUID(),
-        name: res.data.fileName,
-        startTimeSec: snapTime(currentTime),
-        durationSec: full,
-        sourceTrimStartSec: 0,
-        sourceDurationSec: full,
-        dataUri: res.data.dataUri,
-        peaks,
-      };
-      commitHistory();
-      addTimelineAudioClip(importTrackIndex, clip);
-    } catch (err) {
-      console.error('Failed to import audio:', err);
-    }
-  };
-
-  const handleImportVideo = async () => {
-    if (!window.ipcRenderer || !project?.timeline || !showVideoTrack) return;
-    try {
-      const res: IpcResponse<{ dataUri: string; fileName: string }> = await window.ipcRenderer.invoke(
-        IPC_CHANNELS.VIDEO_IMPORT,
-      );
-      if (!res.success || !res.data) return;
-      const full = await probeVideoDurationFromDataUri(res.data.dataUri);
-      const playable = Math.max(0.05, full || 5);
-      const clip: TimelineVideoClip = {
-        id: crypto.randomUUID(),
-        name: res.data.fileName,
-        startTimeSec: snapTime(currentTime),
-        durationSec: playable,
-        sourceTrimStartSec: 0,
-        sourceDurationSec: playable,
-        dataUri: res.data.dataUri,
-      };
-      commitHistory();
-      addTimelineVideoClip(0, clip);
-    } catch (err) {
-      console.error('Failed to import video:', err);
-    }
-  };
-
-  const handleExportAnimatic = async (format: 'mp4' | 'mov') => {
-    if (!project) {
-      await nativeAlert('No project loaded.');
-      return;
-    }
-    if (!window.ipcRenderer) {
-      await nativeAlert('Video export is not available in this environment. Use the installed ScriptBoard application.');
-      return;
-    }
-    if (!hasAnyStoryboardTimelineClips(project)) {
-      await nativeAlert('Place at least one panel on a storyboard timeline layer (drag from the outliner or use +) before exporting video.');
-      return;
-    }
-    setExportingVideo(true);
-    try {
-      const w = project.settings.resolution?.width ?? 1920;
-      const h = project.settings.resolution?.height ?? 1080;
-      const safeName = (project.name || 'ScriptBoard').replace(/[<>:"/\\|?*]+/g, '_').slice(0, 120);
-      const prefs = useAppStore.getState().preferences;
-      const getBrushConfig = (presetId?: string) => {
-        if (!presetId) return defaultBrushes['solid'];
-        const custom = prefs.customBrushes?.find((b) => b.id === presetId);
-        if (custom) return custom;
-        return defaultBrushes[presetId] || defaultBrushes['solid'];
-      };
-      const segments = await buildAnimaticSegmentsForProject(project, flatPanels, getBrushConfig);
-      const audioClips = collectAnimaticExportAudioClips(project);
-      const res: IpcResponse<{ filePath: string }> = await window.ipcRenderer.invoke(IPC_CHANNELS.ANIMATIC_EXPORT_VIDEO, {
-        format,
-        fps,
-        width: w,
-        height: h,
-        segments,
-        audioClips,
-        defaultFileName: `${safeName}-animatic.${format}`,
-      });
-      if (res.success && res.data?.filePath) {
-        await nativeAlert(`Video saved:\n${res.data.filePath}`);
-      } else if (res.message && res.message !== 'Export canceled') {
-        await nativeAlert(`Export failed: ${res.message}`);
-      }
-    } catch (err) {
-      console.error(err);
-      await nativeAlert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setExportingVideo(false);
-    }
-  };
-
-  const onTimelinePointerDown = (e: React.PointerEvent, scrollEl: HTMLDivElement) => {
-    if ((e.target as HTMLElement).closest('[data-no-scrub]')) return;
-    const rect = scrollEl.getBoundingClientRect();
-    const x = e.clientX - rect.left + scrollEl.scrollLeft;
-    let t = x / pxPerSec;
-    t = snapTime(Math.max(0, Math.min(t, timelineDuration)));
-    draggingPlayhead.current = true;
-    seekTo(t);
-  };
 
   if (!project?.timeline) {
     return <div className="flex h-full items-center justify-center bg-[#151515] text-neutral-500">No project loaded.</div>;
@@ -1497,7 +1413,7 @@ export const Timeline: React.FC = () => {
                     void (async () => {
                       if (
                         await nativeConfirm(
-                          'Remove panel from timeline? (Does not remove from Scene)',
+                          'Remove this panel from the timeline? (The panel stays in the storyboard outliner - only this clip is removed.)',
                         )
                       ) {
                         commitHistory();
@@ -1545,7 +1461,7 @@ export const Timeline: React.FC = () => {
                           isActive ? 'ring-2 ring-inset ring-red-500/70' : ''
                         }`}
                         data-no-scrub
-                        title="Drag to move - Click to select panel & seek"
+                        title="Drag to move · Click to select panel & seek · Trash or right-click: remove clip (not the outliner panel · unlock row if needed)"
                         onPointerDown={(e) => {
                           if (tr.locked) return;
                           e.stopPropagation();
@@ -1568,10 +1484,11 @@ export const Timeline: React.FC = () => {
                         <div className="pointer-events-none absolute left-0.5 top-0.5 z-10 max-w-[80%] truncate rounded bg-black/60 px-1 text-[9px]">
                           {vis.name}
                         </div>
+                        {/* FIX 1: Add draggable={false} and pointer-events-none to prevent HTML5 native drag ghosting */}
                         {vis.thumb ? (
-                          <img src={vis.thumb} alt="" className="h-full w-full object-cover opacity-75" />
+                          <img src={vis.thumb} alt="" draggable={false} className="pointer-events-none h-full w-full object-cover opacity-75" />
                         ) : (
-                          <div className="flex h-full w-full items-center justify-center bg-neutral-800 text-neutral-600">
+                          <div className="pointer-events-none flex h-full w-full items-center justify-center bg-neutral-800 text-neutral-600">
                             <Layers2 size={16} />
                           </div>
                         )}
