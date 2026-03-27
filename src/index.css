@@ -1,0 +1,150 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+:root {
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  display: flex;
+  place-items: center;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  margin: 0;
+  padding: 0;
+  text-align: left;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+}
+
+/* Screenplay: Courier Prime (loaded from Google Fonts in index.html) */
+.screenplay-editor,
+.screenplay-editor .ProseMirror {
+  font-family: "Courier Prime", Courier, "Courier New", monospace !important;
+  font-size: var(--script-font-size, 14px) !important;
+  line-height: 1.2 !important;
+}
+.screenplay-editor .prose {
+  font-size: inherit !important;
+}
+.screenplay-editor .prose p,
+.screenplay-editor .prose div {
+  font-size: inherit !important;
+}
+
+/* Tailwind Typography adds spacing between `.prose` paragraphs; screenplay nodes set their own rhythm. */
+.screenplay-editor .prose > p.parenthetical,
+.screenplay-editor .prose p.character + p.parenthetical,
+.screenplay-editor .prose p + p.parenthetical {
+  margin-top: 0 !important;
+  margin-block-start: 0 !important;
+}
+
+.scene-heading {
+  text-transform: uppercase;
+  font-weight: bold;
+  margin-top: 2rem !important;
+  margin-bottom: 1rem !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.action {
+  margin-top: 1rem !important;
+  margin-bottom: 1rem !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.character {
+  text-transform: uppercase;
+  margin-top: 1rem !important;
+  margin-bottom: 0 !important;
+  margin-left: 35% !important;
+}
+
+.parenthetical {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+  margin-left: 28% !important;
+  margin-right: 25% !important;
+}
+
+.dialogue {
+  margin-top: 0 !important;
+  margin-bottom: 1rem !important;
+  margin-left: 18% !important;
+  margin-right: 18% !important;
+}
+
+.transition {
+  text-transform: uppercase;
+  text-align: right;
+  margin-top: 1.5rem !important;
+  margin-bottom: 1.5rem !important;
+  margin-left: 60% !important;
+  margin-right: 0 !important;
+}
+
+/* Storyboard canvas: grid behind transparent WebGL so empty areas read as “no ink”, not white paper. */
+.sb-canvas-transparency-grid {
+  background-color: #262626;
+  background-image:
+    linear-gradient(45deg, #343434 25%, transparent 25%),
+    linear-gradient(-45deg, #343434 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #343434 75%),
+    linear-gradient(-45deg, transparent 75%, #343434 75%);
+  background-size: 12px 12px;
+  background-position:
+    0 0,
+    0 6px,
+    6px -6px,
+    -6px 0px;
+}
+
+/* Custom Scrollbars */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent; 
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #555; 
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #777; 
+}
+
+/* Electron Window Controls */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag-region {
+  -webkit-app-region: no-drag;
+}

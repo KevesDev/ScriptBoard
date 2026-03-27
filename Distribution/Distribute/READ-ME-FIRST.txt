@@ -1,0 +1,15 @@
+ScriptBoard - what to send
+============================
+
+These installers are STANDALONE: your friend only needs 64-bit Windows.
+They do not need Node.js, this source project, or any other files.
+
+Send ONE of these (same app, two ways to run it):
+
+  *-Setup.exe
+    - Double-click to install like a normal Windows app.
+
+  *-Portable.exe
+    - Double-click to run with no installer (good for a quick demo).
+
+SmartScreen may warn on first run until the app is code-signed.

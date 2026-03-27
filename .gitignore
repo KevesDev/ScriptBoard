@@ -1,0 +1,64 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-electron/
+dist-ssr/
+out/
+*.tsbuildinfo
+
+# electron-builder (package.json build.directories.output)
+# Ignore all build output; installers exceed GitHub’s 100MB limit.
+# Only the small “what to send” note under Distribute/ is tracked (not *.exe next to it).
+Distribution/*
+!Distribution/Distribute/
+Distribution/Distribute/*
+!Distribution/Distribute/READ-ME-FIRST.txt
+release/
+Build/
+
+# Vite / tooling caches
+.vite/
+.cache/
+.parcel-cache/
+.eslintcache
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment & secrets (keep .env.example tracked if you add one)
+.env
+.env.*
+!.env.example
+*.pem
+
+# Tests / coverage
+coverage/
+playwright-report/
+test-results/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Optional: local Cursor/AI (uncomment if you do not want machine-specific paths in repo)
+# .cursor/

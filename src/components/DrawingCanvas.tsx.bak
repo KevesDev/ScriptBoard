@@ -1,0 +1,1538 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { useProjectStore } from '../store/projectStore';
+import { useAppStore, defaultBrushes } from '../store/appStore';
+import { 
+  Pen, Eraser, Undo, Redo, Layers as LayersIcon, 
+  Plus, Trash2, MousePointer2, PaintBucket, 
+  Minus, Square, Circle, Settings2, Palette,
+  Brush, Pencil, PenTool, ZoomIn, ZoomOut, Maximize,
+  Eye, EyeOff, ChevronUp, ChevronDown, Pipette
+} from 'lucide-react';
+import type { Stroke, Layer, BrushConfig } from '@common/models';
+import { renderBrushStrokeToContext } from '../engine/BrushEngine';
+import { PixiWorkspace, PixiWorkspaceRef } from './PixiWorkspace';
+import * as d3 from 'd3-contour';
+
+type ToolType = 'pen' | 'eraser' | 'select' | 'line' | 'rectangle' | 'ellipse' | 'eyedropper' | 'paintbucket';
+type BrushPreset = 'solid' | 'pencil' | 'marker' | string;
+
+const CANVAS_WIDTH = 1920;
+const CANVAS_HEIGHT = 1080;
+
+export const DrawingCanvas = () => {
+  const { 
+    project, activePanelId, activeLayerId, 
+    updateLayerStrokes, addLayer, removeLayer, setActiveLayerId,
+    undoStack, redoStack, undo, redo, commitHistory,
+    updateProjectSwatches, updateLayerName, toggleLayerVisibility, 
+    setLayerOpacity, moveLayerUp, moveLayerDown
+  } = useProjectStore();
+
+  const { preferences } = useAppStore();
+  
+  // UI State
+  const [tool, setTool] = useState<ToolType>((preferences.brushSettings.lastTool as ToolType) || 'pen');
+  const [brushPreset, setBrushPreset] = useState<BrushPreset>((preferences.brushSettings.lastPreset as BrushPreset) || 'solid');
+  const [color, setColor] = useState(preferences.brushSettings.lastColor || '#000000');
+  const [brushSize, setBrushSize] = useState(preferences.brushSettings.lastSize || 5);
+  const [zoom, setZoom] = useState(0.5); // Initial zoom to fit in UI
+
+  // Local active values so we don't bleed tool changes to existing strokes
+  const activeToolRef = useRef(tool);
+  const activeBrushPresetRef = useRef(brushPreset);
+  const activeColorRef = useRef(color);
+  const activeBrushSizeRef = useRef(brushSize);
+
+  useEffect(() => { 
+    activeToolRef.current = tool; 
+    useAppStore.getState().setPreferences({ brushSettings: { ...useAppStore.getState().preferences.brushSettings, lastTool: tool }});
+  }, [tool]);
+  useEffect(() => { 
+    activeBrushPresetRef.current = brushPreset; 
+    useAppStore.getState().setPreferences({ brushSettings: { ...useAppStore.getState().preferences.brushSettings, lastPreset: brushPreset }});
+  }, [brushPreset]);
+  useEffect(() => { 
+    activeColorRef.current = color; 
+    useAppStore.getState().setPreferences({ brushSettings: { ...useAppStore.getState().preferences.brushSettings, lastColor: color }});
+  }, [color]);
+  useEffect(() => { 
+    activeBrushSizeRef.current = brushSize; 
+    useAppStore.getState().setPreferences({ brushSettings: { ...useAppStore.getState().preferences.brushSettings, lastSize: brushSize }});
+  }, [brushSize]);
+
+  // Select Tool State
+  const [selectedStrokeIndices, setSelectedStrokeIndices] = useState<Set<number>>(new Set());
+  const [selectionBounds, setSelectionBounds] = useState<{x: number, y: number, w: number, h: number} | null>(null);
+  const [dragOffset, setDragOffset] = useState<{x: number, y: number} | null>(null);
+  const [resizeState, setResizeState] = useState<{ active: boolean, handle: 'tl'|'tr'|'bl'|'br'|null, scaleX: number, scaleY: number, originX: number, originY: number }>({ active: false, handle: null, scaleX: 1, scaleY: 1, originX: 0, originY: 0 });
+  const isDraggingSelection = useRef(false);
+  const dragStartPoint = useRef({ x: 0, y: 0 });
+  const selectionMarqueeStart = useRef({ x: 0, y: 0 });
+
+  const [activeShapeTool, setActiveShapeTool] = useState<'line' | 'rectangle' | 'ellipse'>('line');
+  const [showShapeMenu, setShowShapeMenu] = useState(false);
+
+  const [isSpacePanning, setIsSpacePanning] = useState(false);
+  const isPanningRef = useRef(false);
+  const panStartRef = useRef({ x: 0, y: 0 });
+
+  const swatches = project?.swatches || [
+    '#000000', '#333333', '#666666', '#999999', '#cccccc', '#ffffff',
+    '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#9900ff', '#ff00ff'
+  ];
+
+  // Canvas Refs
+  const containerRef = useRef<HTMLDivElement>(null);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const dryCanvasRef = useRef<HTMLCanvasElement>(null);
+  const wetCanvasRef = useRef<HTMLCanvasElement>(null);
+  const thumbnailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Zoom Handlers
+  const handleZoomIn = () => setZoom(z => Math.min(3, z + 0.1));
+  const handleZoomOut = () => setZoom(z => Math.max(0.1, z - 0.1));
+  
+  const handleColorChange = (newColor: string) => {
+    setColor(newColor);
+    
+    // If we have an active selection, override the color of selected strokes
+    if (selectedStrokeIndices.size > 0 && activePanelId && activeLayerId) {
+      // Save history before modifying
+      commitHistory(); 
+      const state = useProjectStore.getState();
+      const currentLayer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+      
+      if (currentLayer && currentLayer.strokes) {
+        const newStrokes = currentLayer.strokes.map((s, i) => {
+          if (selectedStrokeIndices.has(i) && s.tool !== 'eraser') {
+            return { ...s, color: newColor };
+          }
+          return s;
+        });
+        updateLayerStrokes(activePanelId, activeLayerId, newStrokes);
+      }
+    }
+  };
+
+  const handleBrushSizeChange = (newSize: number) => {
+    setBrushSize(newSize);
+    
+    if (selectedStrokeIndices.size > 0 && activePanelId && activeLayerId) {
+      // Save history before modifying
+      commitHistory(); 
+      const state = useProjectStore.getState();
+      const currentLayer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+      
+      if (currentLayer && currentLayer.strokes) {
+        const newStrokes = currentLayer.strokes.map((s, i) => {
+          if (selectedStrokeIndices.has(i)) {
+            return { ...s, width: newSize * 2 };
+          }
+          return s;
+        });
+        updateLayerStrokes(activePanelId, activeLayerId, newStrokes);
+      }
+    }
+  };
+
+  const handleBrushPresetChange = (preset: BrushPreset) => {
+    setBrushPreset(preset);
+    
+    if (selectedStrokeIndices.size > 0 && activePanelId && activeLayerId) {
+      // Save history before modifying
+      commitHistory(); 
+      const state = useProjectStore.getState();
+      const currentLayer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+      
+      if (currentLayer && currentLayer.strokes) {
+        const newStrokes = currentLayer.strokes.map((s, i) => {
+          if (selectedStrokeIndices.has(i) && s.tool !== 'eraser') {
+            return { ...s, preset };
+          }
+          return s;
+        });
+        updateLayerStrokes(activePanelId, activeLayerId, newStrokes);
+      }
+    }
+  };
+
+  const fitToScreen = () => {
+    if (workspaceRef.current) {
+      const { clientWidth, clientHeight } = workspaceRef.current;
+      const padding = 64; // 32px padding on each side
+      const scaleX = (clientWidth - padding) / CANVAS_WIDTH;
+      const scaleY = (clientHeight - padding) / CANVAS_HEIGHT;
+      // Set to whichever scale is smaller to ensure it fits entirely, but cap at 1.5x max
+      setZoom(Math.min(Math.min(scaleX, scaleY), 1.5));
+    }
+  };
+
+  // Wait for the layout system to settle before auto-fitting
+  useEffect(() => {
+    if (activePanelId && workspaceRef.current) {
+      // If the container is too small (e.g. flexlayout is still initializing), 
+      // defer fitting until it has a reasonable size.
+      const tryFit = () => {
+         if (workspaceRef.current && workspaceRef.current.clientWidth > 100) {
+            fitToScreen();
+         } else {
+            setTimeout(tryFit, 50);
+         }
+      };
+      
+      const timer = setTimeout(tryFit, 200);
+      return () => clearTimeout(timer);
+    }
+  }, [activePanelId]);
+
+  // Derived Brush Settings
+  const getBrushConfig = (presetId?: string): BrushConfig => {
+    if (!presetId) return defaultBrushes['solid'];
+    const custom = preferences.customBrushes?.find(b => b.id === presetId);
+    if (custom) return custom;
+    return defaultBrushes[presetId] || defaultBrushes['solid'];
+  };
+
+  // Drawing State (Not in React state to avoid lag)
+  const isDrawing = useRef(false);
+  const activePointsRef = useRef<number[]>([]);
+
+  // Keyboard Shortcuts & Panning
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Decouple input: If the canvas is not visually active (e.g., we are in Script Mode), ignore all keyboard events.
+      if (!containerRef.current || containerRef.current.offsetParent === null) return;
+
+      // Input elements should handle their own events
+      if (
+        document.activeElement instanceof HTMLInputElement || 
+        document.activeElement instanceof HTMLTextAreaElement ||
+        (document.activeElement as HTMLElement)?.isContentEditable ||
+        (document.activeElement as HTMLElement)?.closest('.ProseMirror')
+      ) return;
+
+      const key = e.key.toLowerCase();
+      const comboPieces = [];
+      if (e.ctrlKey || e.metaKey) comboPieces.push('ctrl');
+      if (e.shiftKey) comboPieces.push('shift');
+      if (e.altKey) comboPieces.push('alt');
+      
+      let val = key;
+      if (val === ' ') val = 'space';
+      
+      // If it's a combo, build the string
+      let combo = '';
+      if (comboPieces.length > 0) {
+        combo = `${comboPieces.join('+')}+${val}`;
+      }
+
+      if (combo && combo === preferences.shortcuts.undo) { e.preventDefault(); undo(); }
+      else if (combo && combo === preferences.shortcuts.redo) { e.preventDefault(); redo(); }
+      else if (combo && combo === preferences.shortcuts.zoomIn) { e.preventDefault(); handleZoomIn(); }
+      else if (combo && combo === preferences.shortcuts.zoomOut) { e.preventDefault(); handleZoomOut(); }
+      
+      // Panning (Hold Space usually)
+      if (val === preferences.shortcuts.pan && !isSpacePanning) {
+        e.preventDefault();
+        setIsSpacePanning(true);
+      }
+
+      // Delete selected strokes
+      if ((val === 'delete' || val === 'backspace') && selectedStrokeIndices.size > 0 && activePanelId && activeLayerId) {
+        commitHistory();
+        const state = useProjectStore.getState();
+        const currentLayer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+        if (currentLayer && currentLayer.strokes) {
+          const newStrokes = currentLayer.strokes.filter((_, i) => !selectedStrokeIndices.has(i));
+          updateLayerStrokes(activePanelId, activeLayerId, newStrokes);
+          setSelectedStrokeIndices(new Set());
+          setSelectionBounds(null);
+        }
+      }
+
+      // Copy/Cut/Paste
+      if (val === 'c' && combo === 'ctrl+c' && selectedStrokeIndices.size > 0 && activePanelId && activeLayerId) {
+        const state = useProjectStore.getState();
+        const currentLayer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+        if (currentLayer && currentLayer.strokes) {
+          const copiedStrokes = currentLayer.strokes.filter((_, i) => selectedStrokeIndices.has(i));
+          localStorage.setItem('scriptboard_clipboard', JSON.stringify(copiedStrokes));
+        }
+      }
+      
+      if (val === 'x' && combo === 'ctrl+x' && selectedStrokeIndices.size > 0 && activePanelId && activeLayerId) {
+        const state = useProjectStore.getState();
+        const currentLayer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+        if (currentLayer && currentLayer.strokes) {
+          const copiedStrokes = currentLayer.strokes.filter((_, i) => selectedStrokeIndices.has(i));
+          localStorage.setItem('scriptboard_clipboard', JSON.stringify(copiedStrokes));
+          
+          commitHistory();
+          const newStrokes = currentLayer.strokes.filter((_, i) => !selectedStrokeIndices.has(i));
+          updateLayerStrokes(activePanelId, activeLayerId, newStrokes);
+          setSelectedStrokeIndices(new Set());
+          setSelectionBounds(null);
+        }
+      }
+      
+      if (val === 'v' && combo === 'ctrl+v' && activePanelId && activeLayerId) {
+        try {
+          const clipboardData = localStorage.getItem('scriptboard_clipboard');
+          if (clipboardData) {
+            const pastedStrokes: Stroke[] = JSON.parse(clipboardData);
+            if (pastedStrokes && pastedStrokes.length > 0) {
+              commitHistory();
+              const state = useProjectStore.getState();
+              const currentLayer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+              const existingStrokes = currentLayer?.strokes || [];
+              
+              // Offset slightly so it's obvious it pasted
+              const offsetStrokes = pastedStrokes.map(s => {
+                const newPoints = [...s.points];
+                for(let i=0; i<newPoints.length; i+=3) {
+                  newPoints[i] += 20; // x offset
+                  newPoints[i+1] += 20; // y offset
+                }
+                return { ...s, points: newPoints };
+              });
+
+              updateLayerStrokes(activePanelId, activeLayerId, [...existingStrokes, ...offsetStrokes]);
+              
+              // Select the newly pasted strokes
+              const newSelection = new Set<number>();
+              for (let i = 0; i < offsetStrokes.length; i++) {
+                newSelection.add(existingStrokes.length + i);
+              }
+              setSelectedStrokeIndices(newSelection);
+              setTool('select');
+              
+              // Calculate new bounds for the pasted selection
+              let sMinX = Infinity, sMaxX = -Infinity, sMinY = Infinity, sMaxY = -Infinity;
+              offsetStrokes.forEach(stroke => {
+                for(let j=0; j<stroke.points.length; j+=3) {
+                  sMinX = Math.min(sMinX, stroke.points[j]);
+                  sMaxX = Math.max(sMaxX, stroke.points[j]);
+                  sMinY = Math.min(sMinY, stroke.points[j+1]);
+                  sMaxY = Math.max(sMaxY, stroke.points[j+1]);
+                }
+              });
+              setSelectionBounds({ x: sMinX - 10, y: sMinY - 10, w: sMaxX - sMinX + 20, h: sMaxY - sMinY + 20 });
+            }
+          }
+        } catch (err) {
+          console.error('Failed to paste strokes', err);
+        }
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      // Decouple input
+      if (!containerRef.current || containerRef.current.offsetParent === null) return;
+
+      let val = e.key.toLowerCase();
+      if (val === ' ') val = 'space';
+      if (val === preferences.shortcuts.pan || val === ' ') {
+        setIsSpacePanning(false);
+        isPanningRef.current = false;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, [undo, redo, preferences.shortcuts, isSpacePanning]);
+
+  // Derived Project State
+  let currentStrokes: Stroke[] = [];
+  let panelLayers: Layer[] = [];
+  
+  if (project && activePanelId) {
+    for (const scene of project.scenes) {
+      const panel = scene.panels.find(p => p.id === activePanelId);
+      if (panel) {
+        panelLayers = panel.layers || [];
+        const layer = panel.layers.find(l => l.id === activeLayerId);
+        if (layer) currentStrokes = layer.strokes || [];
+        break;
+      }
+    }
+  }
+
+  // Pointer Events for Wet Canvas
+  const getCanvasPoint = (e: React.PointerEvent | PointerEvent) => {
+    const canvas = wetCanvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = CANVAS_WIDTH / rect.width;
+    const scaleY = CANVAS_HEIGHT / rect.height;
+    
+    return {
+      x: (e.clientX - rect.left) * scaleX,
+      y: (e.clientY - rect.top) * scaleY
+    };
+  };
+
+  const forceFullRedraw = () => {
+    const canvas = dryCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    const offscreen = document.createElement('canvas');
+    offscreen.width = CANVAS_WIDTH;
+    offscreen.height = CANVAS_HEIGHT;
+    const offscreenCtx = offscreen.getContext('2d');
+    if (!offscreenCtx) return;
+
+    // Render layers from bottom to top
+    const drawLayers = async () => {
+      for (const layer of panelLayers) {
+        if (!layer.visible) continue;
+        
+        offscreenCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        
+        if (layer.type === 'raster') {
+          if (layer.dataBase64) {
+            const img = new Image();
+            await new Promise<void>((resolve) => {
+              img.onload = () => resolve();
+              img.onerror = () => resolve();
+              img.src = layer.dataBase64!;
+            });
+            offscreenCtx.drawImage(img, 0, 0);
+          }
+        } else {
+          const strokes = layer.strokes || [];
+          for (let i = 0; i < strokes.length; i++) {
+            if (layer.id === activeLayerId && dragOffset !== null && selectedStrokeIndices.has(i)) {
+              continue;
+            }
+            const config = strokes[i].brushConfig || getBrushConfig(strokes[i].preset);
+            renderBrushStrokeToContext(offscreenCtx, strokes[i], config);
+          }
+        }
+        
+        ctx.globalAlpha = layer.opacity ?? 1.0;
+        ctx.drawImage(offscreen, 0, 0);
+      }
+      ctx.globalAlpha = 1.0;
+      
+      // Update Thumbnail
+      if (thumbnailTimeoutRef.current) clearTimeout(thumbnailTimeoutRef.current);
+      thumbnailTimeoutRef.current = setTimeout(() => {
+        const thumbCanvas = document.createElement('canvas');
+        thumbCanvas.width = 160;
+        thumbCanvas.height = 90;
+        const tCtx = thumbCanvas.getContext('2d');
+        if (tCtx && activePanelId) {
+          tCtx.fillStyle = '#ffffff';
+          tCtx.fillRect(0, 0, 160, 90);
+          tCtx.drawImage(offscreen, 0, 0, 160, 90); // Use the composited offscreen canvas
+          const dataUrl = thumbCanvas.toDataURL('image/jpeg', 0.5);
+          useProjectStore.getState().updatePanelThumbnail(activePanelId, dataUrl);
+        }
+      }, 1000);
+    };
+    drawLayers();
+  };
+
+  const drawWetCanvas = () => {
+    if (tool === 'select') return;
+    
+    const canvas = wetCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    const activeStroke: Stroke = {
+      tool: activeToolRef.current as 'pen' | 'eraser' | 'line' | 'rectangle' | 'ellipse',
+      preset: activeToolRef.current === 'eraser' ? undefined : activeBrushPresetRef.current,
+      color: activeToolRef.current === 'eraser' ? '#ffffff' : activeColorRef.current,
+      width: activeBrushSizeRef.current * 2,
+      points: activePointsRef.current,
+      brushConfig: getBrushConfig(activeToolRef.current === 'eraser' ? undefined : activeBrushPresetRef.current)
+    };
+    
+    const isEraser = tool === 'eraser';
+    if (isEraser) {
+        const canvasDry = dryCanvasRef.current;
+        if (!canvasDry) return;
+        const ctxDry = canvasDry.getContext('2d');
+        if (!ctxDry) return;
+
+        ctxDry.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        const offscreen = document.createElement('canvas');
+        offscreen.width = CANVAS_WIDTH;
+        offscreen.height = CANVAS_HEIGHT;
+        const offscreenCtx = offscreen.getContext('2d');
+        if (!offscreenCtx) return;
+
+        const drawLayersWet = async () => {
+          for (const layer of panelLayers) {
+            if (!layer.visible) continue;
+            
+            offscreenCtx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            
+            if (layer.type === 'raster') {
+              if (layer.dataBase64) {
+                const img = new Image();
+                await new Promise<void>((resolve) => {
+                  img.onload = () => resolve();
+                  img.onerror = () => resolve();
+                  img.src = layer.dataBase64!;
+                });
+                offscreenCtx.drawImage(img, 0, 0);
+              }
+            } else {
+              const strokes = layer.strokes || [];
+              for (let i = 0; i < strokes.length; i++) {
+                const config = strokes[i].brushConfig || getBrushConfig(strokes[i].preset);
+                renderBrushStrokeToContext(offscreenCtx, strokes[i], config);
+              }
+            }
+            
+            if (layer.id === activeLayerId) {
+               renderBrushStrokeToContext(offscreenCtx, activeStroke, getBrushConfig());
+            }
+            
+            ctxDry.globalAlpha = layer.opacity ?? 1.0;
+            ctxDry.drawImage(offscreen, 0, 0);
+          }
+          ctxDry.globalAlpha = 1.0;
+        };
+        drawLayersWet();
+    } else {
+        renderBrushStrokeToContext(ctx, activeStroke, getBrushConfig(activeBrushPresetRef.current));
+    }
+  };
+
+  // Effect to rebuild the dry canvas anytime layer strokes or visibility changes
+  useEffect(() => {
+    forceFullRedraw();
+  }, [panelLayers, preferences.brushSettings, selectedStrokeIndices, dragOffset, activeLayerId]);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!activePanelId || !activeLayerId) {
+      return;
+    }
+    
+    // Middle mouse button or Spacebar for panning
+    if (e.button === 1 || isSpacePanning) {
+      isPanningRef.current = true;
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    // Only allow left click (or touch/pen) for drawing/selecting
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+    if (tool === 'eyedropper') {
+      const { x, y } = getCanvasPoint(e);
+      const ctx = dryCanvasRef.current?.getContext('2d');
+      if (ctx) {
+        // Get pixel data from the composited dry canvas
+        const pixel = ctx.getImageData(x, y, 1, 1).data;
+        if (pixel[3] > 0) { // Not transparent
+          const hex = '#' + [pixel[0], pixel[1], pixel[2]].map(c => c.toString(16).padStart(2, '0')).join('');
+          handleColorChange(hex);
+          setTool('pen'); // Auto switch back to pen
+        }
+      }
+      return;
+    }
+
+    if (tool === 'paintbucket') {
+      const { x, y } = getCanvasPoint(e);
+      const layer = panelLayers.find(l => l.id === activeLayerId);
+      if (layer) {
+        const offscreen = document.createElement('canvas');
+        offscreen.width = CANVAS_WIDTH;
+        offscreen.height = CANVAS_HEIGHT;
+        const ctx = offscreen.getContext('2d');
+        
+        if (ctx) {
+          const performFill = async () => {
+            if (layer.type === 'raster') {
+              if (layer.dataBase64) {
+                const img = new Image();
+                await new Promise((resolve) => {
+                  img.onload = resolve;
+                  img.src = layer.dataBase64!;
+                });
+                ctx.drawImage(img, 0, 0);
+              }
+            } else {
+              // Render vector strokes to offscreen for hit-testing
+              const strokes = layer.strokes || [];
+              for (const stroke of strokes) {
+                const config = stroke.brushConfig || getBrushConfig(stroke.preset);
+                renderBrushStrokeToContext(ctx, stroke, config);
+              }
+            }
+            
+            // Get pixel data
+            const imgData = ctx.getImageData(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+            const data = imgData.data;
+            const targetColor = color;
+            
+            // Convert hex to rgb
+            const hex2rgb = (hex: string) => {
+              const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+              return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16),
+                a: 255
+              } : { r: 0, g: 0, b: 0, a: 255 };
+            };
+            const fillColor = hex2rgb(targetColor);
+            
+            const startX = Math.floor(x);
+            const startY = Math.floor(y);
+            if (startX < 0 || startX >= CANVAS_WIDTH || startY < 0 || startY >= CANVAS_HEIGHT) return;
+            
+            const startPos = (startY * CANVAS_WIDTH + startX) * 4;
+            const startR = data[startPos];
+            const startG = data[startPos + 1];
+            const startB = data[startPos + 2];
+            const startA = data[startPos + 3];
+
+            // If clicking on same color in raster mode, do nothing. For vector, we might still fill an empty area.
+            if (layer.type === 'raster' && startR === fillColor.r && startG === fillColor.g && startB === fillColor.b && startA === fillColor.a) return;
+            
+            const matchColor = (pos: number) => {
+              const r = data[pos];
+              const g = data[pos + 1];
+              const b = data[pos + 2];
+              const a = data[pos + 3];
+              // Tolerance check
+              const tolerance = 32;
+              return Math.abs(r - startR) <= tolerance && 
+                     Math.abs(g - startG) <= tolerance && 
+                     Math.abs(b - startB) <= tolerance && 
+                     Math.abs(a - startA) <= tolerance;
+            };
+
+            const mask = layer.type === 'vector' ? new Uint8Array(CANVAS_WIDTH * CANVAS_HEIGHT) : null;
+
+            const colorPixel = (pos: number, px: number, py: number) => {
+              if (layer.type === 'raster') {
+                data[pos] = fillColor.r;
+                data[pos + 1] = fillColor.g;
+                data[pos + 2] = fillColor.b;
+                data[pos + 3] = fillColor.a;
+              } else if (mask) {
+                mask[py * CANVAS_WIDTH + px] = 1;
+              }
+            };
+
+            // Flood fill algorithm
+            const pixelStack = [startX, startY];
+            // To prevent infinite loop in vector mode if clicked on empty space
+            const visited = layer.type === 'vector' ? new Uint8Array(CANVAS_WIDTH * CANVAS_HEIGHT) : null;
+            
+            while (pixelStack.length > 0) {
+              let py = pixelStack.pop()!;
+              let px = pixelStack.pop()!;
+              let pos = (py * CANVAS_WIDTH + px) * 4;
+              let idx = py * CANVAS_WIDTH + px;
+              
+              if (visited && visited[idx]) continue;
+
+              while (py >= 0 && matchColor(pos)) {
+                py--;
+                pos -= CANVAS_WIDTH * 4;
+              }
+              pos += CANVAS_WIDTH * 4;
+              py++;
+
+              let reachLeft = false;
+              let reachRight = false;
+
+              while (py < CANVAS_HEIGHT && matchColor(pos)) {
+                idx = py * CANVAS_WIDTH + px;
+                if (visited && visited[idx]) break;
+                if (visited) visited[idx] = 1;
+
+                colorPixel(pos, px, py);
+
+                if (px > 0) {
+                  if (matchColor(pos - 4)) {
+                    if (!reachLeft) {
+                      pixelStack.push(px - 1, py);
+                      reachLeft = true;
+                    }
+                  } else if (reachLeft) {
+                    reachLeft = false;
+                  }
+                }
+
+                if (px < CANVAS_WIDTH - 1) {
+                  if (matchColor(pos + 4)) {
+                    if (!reachRight) {
+                      pixelStack.push(px + 1, py);
+                      reachRight = true;
+                    }
+                  } else if (reachRight) {
+                    reachRight = false;
+                  }
+                }
+
+                py++;
+                pos += CANVAS_WIDTH * 4;
+              }
+            }
+            
+            commitHistory();
+            
+            if (layer.type === 'raster') {
+              ctx.putImageData(imgData, 0, 0);
+              const newBase64 = offscreen.toDataURL('image/png');
+              useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, newBase64);
+            } else if (mask) {
+              // Vector vectorization
+              const contours = d3.contours().size([CANVAS_WIDTH, CANVAS_HEIGHT]).thresholds([0.5])(mask as any as number[]);
+              
+              const fillPaths: number[][] = [];
+              
+              for (const contour of contours) {
+                if (contour.coordinates) {
+                  for (const polygon of contour.coordinates) {
+                    for (const ring of polygon) {
+                      const flatRing: number[] = [];
+                      for (const point of ring) {
+                        flatRing.push(point[0], point[1]);
+                      }
+                      if (flatRing.length >= 6) {
+                        fillPaths.push(flatRing);
+                      }
+                    }
+                  }
+                }
+              }
+
+              if (fillPaths.length > 0) {
+                const newStroke: Stroke = {
+                  tool: 'fill',
+                  color: targetColor,
+                  width: 1,
+                  points: [],
+                  fillPaths
+                };
+                updateLayerStrokes(activePanelId, activeLayerId, [...(layer.strokes || []), newStroke]);
+              }
+            }
+            
+            forceFullRedraw();
+          };
+          performFill();
+        }
+      }
+      return;
+    }
+
+    if (tool === 'select') {
+      const { x, y } = getCanvasPoint(e);
+      
+      // Check resize handles first
+      if (selectionBounds) {
+        const handleSize = 10;
+        const b = selectionBounds;
+        const handles = [
+          { type: 'tl', x: b.x, y: b.y },
+          { type: 'tr', x: b.x + b.w, y: b.y },
+          { type: 'bl', x: b.x, y: b.y + b.h },
+          { type: 'br', x: b.x + b.w, y: b.y + b.h }
+        ];
+        
+        for (const h of handles) {
+          if (x >= h.x - handleSize && x <= h.x + handleSize && y >= h.y - handleSize && y <= h.y + handleSize) {
+            setResizeState({
+              active: true,
+              handle: h.type as any,
+              scaleX: 1, scaleY: 1,
+              originX: h.type.includes('l') ? b.x + b.w : b.x,
+              originY: h.type.includes('t') ? b.y + b.h : b.y
+            });
+            dragStartPoint.current = { x, y };
+            e.currentTarget.setPointerCapture(e.pointerId);
+            return;
+          }
+        }
+      }
+
+      // Check if clicked inside existing selection bounds (for move)
+      if (selectionBounds && x >= selectionBounds.x && x <= selectionBounds.x + selectionBounds.w && y >= selectionBounds.y && y <= selectionBounds.y + selectionBounds.h) {
+        isDraggingSelection.current = true;
+        dragStartPoint.current = { x, y };
+      } else {
+        // Start a new marquee selection
+        setSelectedStrokeIndices(new Set());
+        setSelectionBounds(null);
+        selectionMarqueeStart.current = { x, y };
+        isDrawing.current = true; // reuse isDrawing flag to track mouse down state for marquee
+      }
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    // We removed strict button checks. If the user touches the canvas and they aren't panning, they are drawing.
+    e.currentTarget.setPointerCapture(e.pointerId);
+    
+    // Save history before modifying
+    commitHistory(); 
+    
+    isDrawing.current = true;
+    activePointsRef.current = [];
+    
+    const { x, y } = getCanvasPoint(e);
+    // Since we assume intention to draw, if it's not a pen, or pressure is 0, give it a firm 0.5 default.
+    // However, for pen tools, if the pressure is indeed 0 (sometimes happens on initial touch), 
+    // it's better to default to a small pressure rather than 0.5 to allow build up.
+    let pressure = 0.5;
+    if (e.pointerType === 'pen') {
+      pressure = e.pressure > 0 ? e.pressure : 0.1;
+    }
+    
+    activePointsRef.current.push(x, y, pressure);
+    
+    // Force a redraw immediately so dots/stamps appear instantly on click
+    drawWetCanvas();
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!activePanelId) return;
+    if (isPanningRef.current && workspaceRef.current) {
+      const dx = e.movementX;
+      const dy = e.movementY;
+      
+      // Calculate scaled scroll amount based on zoom if needed, 
+      // but native scroll coordinates are usually 1:1 with screen pixels
+      workspaceRef.current.scrollLeft -= dx;
+      workspaceRef.current.scrollTop -= dy;
+      
+      panStartRef.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
+
+    if (tool === 'select') {
+      const { x, y } = getCanvasPoint(e);
+      
+      if (resizeState.active && selectionBounds) {
+        // Calculate new scale based on drag distance
+        const dx = x - dragStartPoint.current.x;
+        const dy = y - dragStartPoint.current.y;
+        
+        let newScaleX = 1;
+        let newScaleY = 1;
+
+        if (resizeState.handle?.includes('r')) newScaleX = (selectionBounds.w + dx) / selectionBounds.w;
+        if (resizeState.handle?.includes('l')) newScaleX = (selectionBounds.w - dx) / selectionBounds.w;
+        if (resizeState.handle?.includes('b')) newScaleY = (selectionBounds.h + dy) / selectionBounds.h;
+        if (resizeState.handle?.includes('t')) newScaleY = (selectionBounds.h - dy) / selectionBounds.h;
+
+        // Prevent inverting or zero scale
+        if (Math.abs(newScaleX) < 0.1) newScaleX = 0.1 * Math.sign(newScaleX) || 0.1;
+        if (Math.abs(newScaleY) < 0.1) newScaleY = 0.1 * Math.sign(newScaleY) || 0.1;
+
+        // Hold shift for proportional scaling
+        if (e.shiftKey) {
+          const avgScale = (Math.abs(newScaleX) + Math.abs(newScaleY)) / 2;
+          newScaleX = avgScale * Math.sign(newScaleX);
+          newScaleY = avgScale * Math.sign(newScaleY);
+        }
+
+        setResizeState(prev => ({ ...prev, scaleX: newScaleX, scaleY: newScaleY }));
+        return;
+      }
+
+      if (isDraggingSelection.current) {
+        const dx = x - dragStartPoint.current.x;
+        const dy = y - dragStartPoint.current.y;
+        setDragOffset({ x: dx, y: dy });
+        // The dragging visuals are handled by a useEffect
+      } else if (isDrawing.current) {
+        // Drawing marquee
+        const sx = selectionMarqueeStart.current.x;
+        const sy = selectionMarqueeStart.current.y;
+        const w = x - sx;
+        const h = y - sy;
+        
+        const ctx = wetCanvasRef.current?.getContext('2d');
+        if (ctx) {
+          ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+          ctx.setLineDash([5, 5]);
+          ctx.strokeStyle = '#3b82f6';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(sx, sy, w, h);
+          ctx.setLineDash([]);
+        }
+      }
+      return;
+    }
+
+    if (!isDrawing.current) return;
+    
+    // Utilize Coalesced Events for high-frequency tablet input (133Hz+)
+    const events = e.nativeEvent.getCoalescedEvents ? e.nativeEvent.getCoalescedEvents() : [e.nativeEvent];
+    
+    for (const ev of events) {
+      const { x, y } = getCanvasPoint(ev as React.PointerEvent | PointerEvent);
+      let pressure = 0.5;
+      if (ev.pointerType === 'pen') {
+        pressure = ev.pressure > 0 ? ev.pressure : 0.1;
+      }
+      activePointsRef.current.push(x, y, pressure);
+    }
+
+    drawWetCanvas();
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch (err) {}
+
+    if (!activePanelId) return;
+    if (e.button === 1 || isPanningRef.current) {
+      isPanningRef.current = false;
+      return;
+    }
+
+    if (tool === 'select') {
+      if (resizeState.active && selectionBounds && activeLayerId) {
+        commitHistory();
+        const state = useProjectStore.getState();
+        const layer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+        
+        if (layer && layer.strokes) {
+          const { scaleX, scaleY, originX, originY } = resizeState;
+          
+          const newStrokes = layer.strokes.map((s, i) => {
+            if (selectedStrokeIndices.has(i)) {
+              const newPoints = [];
+              for (let j = 0; j < s.points.length; j += 3) {
+                const px = s.points[j];
+                const py = s.points[j+1];
+                
+                // Scale point relative to the origin
+                const newX = originX + (px - originX) * scaleX;
+                const newY = originY + (py - originY) * scaleY;
+                
+                newPoints.push(newX, newY, s.points[j+2]);
+              }
+              
+              // Also scale stroke width based on average scaling factor
+              const avgScale = (Math.abs(scaleX) + Math.abs(scaleY)) / 2;
+              return { ...s, points: newPoints, width: s.width * avgScale };
+            }
+            return s;
+          });
+          
+          updateLayerStrokes(activePanelId, activeLayerId, newStrokes);
+          
+          // Recompute new selection bounds
+          setSelectionBounds({
+            x: Math.min(originX, originX + (selectionBounds.x - originX) * scaleX, originX + (selectionBounds.x + selectionBounds.w - originX) * scaleX),
+            y: Math.min(originY, originY + (selectionBounds.y - originY) * scaleY, originY + (selectionBounds.y + selectionBounds.h - originY) * scaleY),
+            w: Math.abs(selectionBounds.w * scaleX),
+            h: Math.abs(selectionBounds.h * scaleY)
+          });
+        }
+        
+        setResizeState({ active: false, handle: null, scaleX: 1, scaleY: 1, originX: 0, originY: 0 });
+        
+      } else if (isDraggingSelection.current) {
+        isDraggingSelection.current = false;
+        if (dragOffset && activeLayerId) {
+          commitHistory();
+          const state = useProjectStore.getState();
+          const layer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+          if (layer && layer.strokes) {
+            const newStrokes = layer.strokes.map((s, i) => {
+              if (selectedStrokeIndices.has(i)) {
+                const newPoints = [];
+                for (let j = 0; j < s.points.length; j += 3) {
+                  newPoints.push(s.points[j] + dragOffset.x, s.points[j+1] + dragOffset.y, s.points[j+2]);
+                }
+                return { ...s, points: newPoints };
+              }
+              return s;
+            });
+            updateLayerStrokes(activePanelId, activeLayerId, newStrokes);
+          }
+          if (selectionBounds) {
+            setSelectionBounds({
+              x: selectionBounds.x + dragOffset.x,
+              y: selectionBounds.y + dragOffset.y,
+              w: selectionBounds.w,
+              h: selectionBounds.h
+            });
+          }
+          setDragOffset(null);
+        }
+      } else if (isDrawing.current) {
+        isDrawing.current = false;
+        const { x, y } = getCanvasPoint(e);
+        const sx = selectionMarqueeStart.current.x;
+        const sy = selectionMarqueeStart.current.y;
+        
+        const minX = Math.min(sx, x);
+        const maxX = Math.max(sx, x);
+        const minY = Math.min(sy, y);
+        const maxY = Math.max(sy, y);
+        
+        const state = useProjectStore.getState();
+        const layer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+        
+        if (layer && layer.strokes && maxX - minX > 5 && maxY - minY > 5) {
+          const newSelected = new Set<number>();
+          let sMinX = Infinity, sMaxX = -Infinity, sMinY = Infinity, sMaxY = -Infinity;
+          
+          layer.strokes.forEach((stroke, i) => {
+            let inside = false;
+            for(let j=0; j<stroke.points.length; j+=3) {
+              const px = stroke.points[j];
+              const py = stroke.points[j+1];
+              if (px >= minX && px <= maxX && py >= minY && py <= maxY) {
+                inside = true;
+                break;
+              }
+            }
+            if (inside) {
+              newSelected.add(i);
+              for(let j=0; j<stroke.points.length; j+=3) {
+                sMinX = Math.min(sMinX, stroke.points[j]);
+                sMaxX = Math.max(sMaxX, stroke.points[j]);
+                sMinY = Math.min(sMinY, stroke.points[j+1]);
+                sMaxY = Math.max(sMaxY, stroke.points[j+1]);
+              }
+            }
+          });
+          
+          if (newSelected.size > 0) {
+            setSelectedStrokeIndices(newSelected);
+            setSelectionBounds({ x: sMinX - 10, y: sMinY - 10, w: sMaxX - sMinX + 20, h: sMaxY - sMinY + 20 });
+          } else {
+            setSelectedStrokeIndices(new Set());
+            setSelectionBounds(null);
+          }
+        } else {
+          setSelectedStrokeIndices(new Set());
+          setSelectionBounds(null);
+        }
+        
+        const ctx = wetCanvasRef.current?.getContext('2d');
+        if (ctx) ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+      }
+      return;
+    }
+
+    if (!isDrawing.current || !activeLayerId) return;
+    isDrawing.current = false;
+    
+    if (activePointsRef.current.length > 0 && activeToolRef.current !== 'select') {
+      const newStroke: Stroke = {
+        tool: activeToolRef.current as 'pen' | 'eraser' | 'line' | 'rectangle' | 'ellipse',
+        preset: activeToolRef.current === 'eraser' ? undefined : activeBrushPresetRef.current,
+        color: activeToolRef.current === 'eraser' ? '#ffffff' : activeColorRef.current,
+        width: activeBrushSizeRef.current * 2,
+        points: [...activePointsRef.current],
+        brushConfig: getBrushConfig(activeToolRef.current === 'eraser' ? undefined : activeBrushPresetRef.current)
+      };
+
+      const layer = panelLayers.find(l => l.id === activeLayerId);
+      if (layer?.type === 'raster') {
+        // Raster drawing logic: bake the stroke into a base64 image
+        const offscreen = document.createElement('canvas');
+        offscreen.width = CANVAS_WIDTH;
+        offscreen.height = CANVAS_HEIGHT;
+        const ctx = offscreen.getContext('2d');
+        
+        if (ctx) {
+          // Draw existing raster data first
+          const drawRasterAndCommit = async () => {
+            if (layer.dataBase64) {
+              const img = new Image();
+              await new Promise((resolve) => {
+                img.onload = resolve;
+                img.src = layer.dataBase64!;
+              });
+              ctx.drawImage(img, 0, 0);
+            }
+            // Draw new stroke
+            renderBrushStrokeToContext(ctx, newStroke, newStroke.brushConfig!);
+            
+            // Save to Zustand
+            const newBase64 = offscreen.toDataURL('image/png');
+            useProjectStore.getState().updateLayerDataBase64(activePanelId, activeLayerId, newBase64);
+            forceFullRedraw();
+          };
+          drawRasterAndCommit();
+        }
+      } else {
+        // Vector logic: Commit stroke to Zustand global state
+        updateLayerStrokes(activePanelId, activeLayerId, [...currentStrokes, newStroke]);
+      }
+    }
+    
+    const ctx = wetCanvasRef.current?.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    activePointsRef.current = [];
+
+    // If it was an eraser, force a full redraw immediately to ensure the wet canvas override 
+    // is properly committed to the dry canvas
+    if (tool === 'eraser') {
+       forceFullRedraw();
+    }
+  };
+
+  // Clear selection if tool changes
+  useEffect(() => {
+    if (tool !== 'select') {
+      setSelectedStrokeIndices(new Set());
+      setSelectionBounds(null);
+      setDragOffset(null);
+      const ctx = wetCanvasRef.current?.getContext('2d');
+      if (ctx) ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+    }
+  }, [tool]);
+
+  // Draw Selection & Dragging Visuals
+  useEffect(() => {
+    if (tool !== 'select' || isDrawing.current) return;
+    
+    const canvas = wetCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+    if (selectionBounds) {
+      const offsetX = dragOffset ? dragOffset.x : 0;
+      const offsetY = dragOffset ? dragOffset.y : 0;
+      
+      const { scaleX, scaleY, originX, originY, active: isResizing } = resizeState;
+      
+      // Calculate current visual bounds (accounting for resize or drag)
+      let bX = selectionBounds.x + offsetX;
+      let bY = selectionBounds.y + offsetY;
+      let bW = selectionBounds.w;
+      let bH = selectionBounds.h;
+      
+      if (isResizing) {
+        bX = Math.min(originX, originX + (selectionBounds.x - originX) * scaleX, originX + (selectionBounds.x + selectionBounds.w - originX) * scaleX);
+        bY = Math.min(originY, originY + (selectionBounds.y - originY) * scaleY, originY + (selectionBounds.y + selectionBounds.h - originY) * scaleY);
+        bW = Math.abs(selectionBounds.w * scaleX);
+        bH = Math.abs(selectionBounds.h * scaleY);
+      }
+      
+      // Draw selection bounding box
+      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(bX, bY, bW, bH);
+      
+      // Add resize handles
+      ctx.fillStyle = '#ffffff';
+      const drawHandle = (hx: number, hy: number) => {
+        ctx.fillRect(hx - 4, hy - 4, 8, 8);
+        ctx.strokeRect(hx - 4, hy - 4, 8, 8);
+      };
+      
+      drawHandle(bX, bY); // tl
+      drawHandle(bX + bW, bY); // tr
+      drawHandle(bX, bY + bH); // bl
+      drawHandle(bX + bW, bY + bH); // br
+      
+      ctx.setLineDash([]);
+
+      // If dragging or resizing, draw the selected strokes preview
+      if ((dragOffset || isResizing) && activeLayerId) {
+        const state = useProjectStore.getState();
+        const layer = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelId)?.layers.find(l => l.id === activeLayerId);
+        if (layer && layer.strokes) {
+          ctx.save();
+          if (dragOffset) ctx.translate(dragOffset.x, dragOffset.y);
+          
+          layer.strokes.forEach((stroke, i) => {
+            if (selectedStrokeIndices.has(i)) {
+              if (isResizing) {
+                // To preview scale, we construct a temporary stroke scaled from origin
+                const tempPts = [];
+                for (let j = 0; j < stroke.points.length; j += 3) {
+                  const px = stroke.points[j];
+                  const py = stroke.points[j+1];
+                  tempPts.push(
+                    originX + (px - originX) * scaleX,
+                    originY + (py - originY) * scaleY,
+                    stroke.points[j+2]
+                  );
+                }
+                const avgScale = (Math.abs(scaleX) + Math.abs(scaleY)) / 2;
+                const config = stroke.brushConfig || getBrushConfig(stroke.preset);
+                renderBrushStrokeToContext(ctx, { ...stroke, points: tempPts, width: stroke.width * avgScale }, config);
+              } else {
+                const config = stroke.brushConfig || getBrushConfig(stroke.preset);
+                renderBrushStrokeToContext(ctx, stroke, config);
+              }
+            }
+          });
+          ctx.restore();
+        }
+      }
+    }
+  }, [selectionBounds, dragOffset, resizeState, tool, activeLayerId, activePanelId, selectedStrokeIndices, preferences.brushSettings]);
+
+  if (!project) return <div className="flex h-full items-center justify-center text-neutral-500 bg-[#151515]">No project loaded.</div>;
+  if (!activePanelId) return <div className="flex h-full items-center justify-center text-neutral-500 bg-[#151515]">Select a panel from the Outliner to start drawing.</div>;
+
+  return (
+    <div className="flex h-full w-full bg-[#1e1e1e] text-neutral-300 overflow-hidden select-none">
+      
+      {/* Left Toolbar (Tools) */}
+      <div className="w-14 shrink-0 bg-[#323232] border-r border-black flex flex-col items-center py-2 gap-2 shadow-xl z-10">
+        <ToolButton icon={<MousePointer2 size={18} />} active={tool === 'select'} onClick={() => setTool('select')} title="Select / Move" />
+        <div className="w-8 h-px bg-neutral-600 my-1"></div>
+        <ToolButton icon={<Pen size={18} />} active={tool === 'pen'} onClick={() => setTool('pen')} title="Brush / Pen" />
+        <ToolButton icon={<Eraser size={18} />} active={tool === 'eraser'} onClick={() => setTool('eraser')} title="Eraser" />
+        <ToolButton icon={<Pipette size={18} />} active={tool === 'eyedropper'} onClick={() => setTool('eyedropper')} title="Eyedropper" />
+        <ToolButton icon={<PaintBucket size={18} />} active={tool === 'paintbucket'} onClick={() => setTool('paintbucket')} title="Fill Bucket" />
+        <div className="w-8 h-px bg-neutral-600 my-1"></div>
+        <div className="relative flex flex-col items-center">
+          <ToolButton 
+            icon={activeShapeTool === 'line' ? <Minus size={18} /> : activeShapeTool === 'rectangle' ? <Square size={18} /> : <Circle size={18} />} 
+            active={['line', 'rectangle', 'ellipse'].includes(tool)} 
+            onClick={() => { setTool(activeShapeTool); setShowShapeMenu(false); }} 
+            onContextMenu={(e) => { e.preventDefault(); setShowShapeMenu(!showShapeMenu); }}
+            title="Shapes (Right-click for options)" 
+          />
+          {showShapeMenu && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowShapeMenu(false)} onContextMenu={(e) => { e.preventDefault(); setShowShapeMenu(false); }}></div>
+              <div className="absolute left-full top-0 ml-2 bg-[#282828] border border-black shadow-lg rounded p-1 flex flex-col gap-1 z-50">
+                <button onClick={() => { setActiveShapeTool('line'); setTool('line'); setShowShapeMenu(false); }} className={`p-2 rounded hover:bg-[#444] transition-colors ${activeShapeTool === 'line' ? 'text-blue-400 bg-[#333]' : 'text-neutral-300'}`} title="Line"><Minus size={18} /></button>
+                <button onClick={() => { setActiveShapeTool('rectangle'); setTool('rectangle'); setShowShapeMenu(false); }} className={`p-2 rounded hover:bg-[#444] transition-colors ${activeShapeTool === 'rectangle' ? 'text-blue-400 bg-[#333]' : 'text-neutral-300'}`} title="Rectangle"><Square size={18} /></button>
+                <button onClick={() => { setActiveShapeTool('ellipse'); setTool('ellipse'); setShowShapeMenu(false); }} className={`p-2 rounded hover:bg-[#444] transition-colors ${activeShapeTool === 'ellipse' ? 'text-blue-400 bg-[#333]' : 'text-neutral-300'}`} title="Ellipse"><Circle size={18} /></button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Center Canvas Workspace */}
+      <div className="flex-1 relative flex flex-col bg-[#1e1e1e] overflow-hidden" ref={containerRef}>
+        
+        {/* Top Control Bar */}
+        <div className="h-10 bg-[#323232] border-b border-black flex items-center px-4 gap-4 shrink-0 shadow-md z-10">
+          <div className="flex items-center gap-1 border-r border-neutral-600 pr-4">
+            <button onClick={undo} disabled={undoStack.length === 0} className={`p-1.5 rounded ${undoStack.length > 0 ? 'hover:bg-neutral-600' : 'opacity-30'}`} title="Undo"><Undo size={16} /></button>
+            <button onClick={redo} disabled={redoStack.length === 0} className={`p-1.5 rounded ${redoStack.length > 0 ? 'hover:bg-neutral-600' : 'opacity-30'}`} title="Redo"><Redo size={16} /></button>
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <button onClick={handleZoomOut} className="p-1.5 rounded hover:bg-neutral-600 text-neutral-300 hover:text-white" title="Zoom Out"><ZoomOut size={16} /></button>
+            <input type="range" min="0.1" max="3" step="0.05" value={zoom} onChange={e => setZoom(parseFloat(e.target.value))} className="w-24 accent-blue-500" />
+            <button onClick={handleZoomIn} className="p-1.5 rounded hover:bg-neutral-600 text-neutral-300 hover:text-white" title="Zoom In"><ZoomIn size={16} /></button>
+            <button onClick={fitToScreen} className="p-1.5 rounded hover:bg-neutral-600 ml-1 text-neutral-400 hover:text-white" title="Fit to Screen"><Maximize size={16} /></button>
+            <span className="w-10 text-right font-mono text-neutral-300">{Math.round(zoom * 100)}%</span>
+          </div>
+        </div>
+
+        {/* The Canvas Canvas Wrapper */}
+        <div className="flex-1 relative overflow-auto bg-[#151515] flex items-center justify-center p-8" ref={workspaceRef}>
+          {/* Sizing wrapper to ensure scrollbars work perfectly without squishing */}
+          <div 
+            className="relative shrink-0 transition-all duration-75"
+            style={{ width: CANVAS_WIDTH * zoom, height: CANVAS_HEIGHT * zoom }}
+          >
+            <div 
+              className="absolute top-0 left-0 bg-white shadow-2xl border border-neutral-700 origin-top-left touch-none select-none"
+              style={{ 
+                width: CANVAS_WIDTH, height: CANVAS_HEIGHT, 
+                transform: `scale(${zoom})`,
+                cursor: isSpacePanning ? (isPanningRef.current ? 'grabbing' : 'grab') : 'crosshair'
+              }}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerOut={handlePointerUp}
+              onPointerCancel={handlePointerUp}
+              onContextMenu={e => e.preventDefault()}
+            >
+              {/* Background Layer (Simulates white paper) */}
+            <div className="absolute inset-0 bg-white pointer-events-none"></div>
+            
+            {/* Committed Strokes Layer */}
+            <canvas 
+              ref={dryCanvasRef} 
+              width={CANVAS_WIDTH} 
+              height={CANVAS_HEIGHT} 
+              className="absolute inset-0 pointer-events-none"
+            />
+            
+              {/* Active Drawing Layer */}
+            <canvas 
+              ref={wetCanvasRef} 
+              width={CANVAS_WIDTH} 
+              height={CANVAS_HEIGHT} 
+              className="absolute inset-0 pointer-events-none opacity-100"
+            />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Right Sidebar (Properties & Layers) */}
+      <div className="w-72 shrink-0 bg-[#323232] border-l border-black flex flex-col z-10 text-sm overflow-hidden">
+        
+        {/* Tool Properties Panel */}
+        <div className="flex flex-col border-b border-black shrink-0 max-h-[50%] overflow-y-auto custom-scrollbar">
+          <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black">
+            <Settings2 size={14} /> Tool Properties
+          </div>
+          
+          <div className="p-4 flex flex-col gap-4">
+            {(tool === 'pen' || tool === 'eraser') ? (
+              <>
+                {tool === 'pen' && (
+                  <div>
+                    <div className="text-xs text-neutral-400 mb-2 uppercase tracking-wider font-semibold">Brushes</div>
+                    <div className="flex gap-2">
+                      <BrushButton 
+                        icon={<PenTool size={18} />} 
+                        label="Pen" 
+                        active={brushPreset === 'solid'} 
+                        onClick={() => handleBrushPresetChange('solid')} 
+                      />
+                      <BrushButton 
+                        icon={<Pencil size={18} />} 
+                        label="Pencil" 
+                        active={brushPreset === 'pencil'} 
+                        onClick={() => handleBrushPresetChange('pencil')} 
+                      />
+                      <BrushButton 
+                        icon={<Brush size={18} />} 
+                        label="Marker" 
+                        active={brushPreset === 'marker'} 
+                        onClick={() => handleBrushPresetChange('marker')} 
+                      />
+                    </div>
+                  </div>
+                )}
+
+                <div className={tool === 'pen' ? "mt-2" : ""}>
+                  <label className="flex justify-between mb-1 text-xs text-neutral-300">
+                    <span>{tool === 'eraser' ? 'Eraser Size' : 'Maximum Size'}</span> 
+                    <span className="bg-[#222222] px-2 py-0.5 rounded border border-black">{brushSize} px</span>
+                  </label>
+                  <input type="range" min="1" max="100" value={brushSize} onChange={e => handleBrushSizeChange(parseInt(e.target.value))} className="w-full accent-blue-500" />
+                </div>
+                
+                {tool === 'pen' && (
+                  <div className="mt-4 pt-4 border-t border-black/50 flex flex-col gap-3">
+                    <div className="text-xs text-neutral-400 uppercase tracking-wider font-semibold flex justify-between">
+                      <span>Brush Settings</span>
+                    </div>
+                    
+                    <div>
+                      <label className="flex justify-between mb-1 text-[10px] text-neutral-300">
+                        <span>Spacing</span> 
+                        <span className="bg-[#222] px-1 py-0.5 rounded border border-black">
+                          {Math.round(getBrushConfig(brushPreset).spacing * 100)}%
+                        </span>
+                      </label>
+                      <input type="range" min="1" max="100" value={Math.round(getBrushConfig(brushPreset).spacing * 100)} readOnly className="w-full accent-blue-500 opacity-50" title="Custom brush editing coming soon" />
+                    </div>
+                    
+                    <div>
+                      <label className="flex justify-between mb-1 text-[10px] text-neutral-300">
+                        <span>Scatter</span> 
+                        <span className="bg-[#222] px-1 py-0.5 rounded border border-black">
+                          {Math.round(getBrushConfig(brushPreset).scatter * 100)}%
+                        </span>
+                      </label>
+                      <input type="range" min="0" max="100" value={Math.round(getBrushConfig(brushPreset).scatter * 100)} readOnly className="w-full accent-blue-500 opacity-50" title="Custom brush editing coming soon" />
+                    </div>
+                    
+                    <div className="flex gap-2 mt-1">
+                       <button className="flex-1 text-[10px] py-1 bg-[#444] hover:bg-[#555] rounded border border-black text-neutral-300" title="Import Alpha PNG as Brush">Import PNG...</button>
+                       <button className="flex-1 text-[10px] py-1 bg-[#444] hover:bg-[#555] rounded border border-black text-neutral-300" title="Export Brush Config">Export .json</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="text-neutral-500 text-xs italic">
+                {tool === 'select' ? 'Select Tool active.' : 
+                 tool === 'eyedropper' ? 'Click on canvas to pick color.' : 'Shape tool active.'}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Colour Panel */}
+        <div className="flex flex-col border-b border-black shrink-0">
+          <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black">
+            <Palette size={14} /> Colour
+          </div>
+          <div className="p-4 flex flex-col gap-4">
+             <div className="flex gap-4 items-start">
+               {/* Current Color Display */}
+               <div className="w-16 h-16 rounded shadow-inner border-2 border-neutral-900 shrink-0 relative overflow-hidden">
+                 <div className="absolute inset-0" style={{backgroundColor: color}}></div>
+                 {/* Invisible native color picker over the box so clicking it opens OS picker */}
+                 <input type="color" value={color} onChange={e => handleColorChange(e.target.value)} className="opacity-0 absolute inset-0 w-full h-full cursor-pointer" />
+               </div>
+               
+               <div className="flex-1 flex flex-col gap-2">
+                 <div className="text-xs text-neutral-400 font-mono">HEX: {color.toUpperCase()}</div>
+                 <button 
+                   onClick={() => !swatches.includes(color) && updateProjectSwatches([...swatches, color])}
+                   className="text-xs bg-[#444444] hover:bg-[#555555] py-1 px-2 rounded border border-black transition-colors"
+                 >
+                   + Add to Swatches
+                 </button>
+               </div>
+             </div>
+
+             <div>
+               <div className="mb-2 text-xs text-neutral-400 uppercase tracking-wider font-semibold">Swatches</div>
+               <div className="flex flex-wrap gap-1.5">
+                 {swatches.map((s, i) => (
+                   <button 
+                     key={i} 
+                     onClick={() => handleColorChange(s)} 
+                     className={`w-6 h-6 rounded-sm border shadow-sm hover:scale-110 transition-transform ${color === s ? 'border-white' : 'border-black'}`} 
+                     style={{backgroundColor: s}} 
+                     title={s}
+                   />
+                 ))}
+               </div>
+             </div>
+          </div>
+        </div>
+
+        {/* Layers Panel */}
+        <div className="flex-1 flex flex-col min-h-0 bg-[#2a2a2a] overflow-hidden">
+          <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex justify-between items-center border-b border-black shadow-sm shrink-0">
+            <div className="flex items-center gap-2"><LayersIcon size={14} /> Layers</div>
+            <div className="flex items-center gap-1">
+              <button 
+                onClick={() => addLayer(activePanelId, 'vector')}
+                className="p-1 hover:bg-[#444] rounded transition-colors text-neutral-400 hover:text-white flex items-center gap-1"
+                title="Add Vector Layer"
+              >
+                <Plus size={14} /> V
+              </button>
+              <button 
+                onClick={() => addLayer(activePanelId, 'raster')}
+                className="p-1 hover:bg-[#444] rounded transition-colors text-neutral-400 hover:text-white flex items-center gap-1"
+                title="Add Raster Layer"
+              >
+                <Plus size={14} /> R
+              </button>
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 flex flex-col gap-1">
+            {panelLayers.length === 0 && (
+               <div className="text-xs text-neutral-500 italic text-center mt-4">No layers. Click + to add.</div>
+            )}
+            {[...panelLayers].reverse().map((layer, index, array) => (
+              <div 
+                key={layer.id} 
+                onClick={() => setActiveLayerId(layer.id)}
+                className={`group flex flex-col gap-1 px-2 py-2 text-xs rounded cursor-pointer border transition-colors ${activeLayerId === layer.id ? 'bg-[#3b82f6] border-blue-400' : 'bg-[#333333] border-transparent hover:bg-[#404040]'}`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); toggleLayerVisibility(activePanelId, layer.id); }}
+                      className={`hover:text-white ${layer.visible ? (activeLayerId === layer.id ? 'text-white' : 'text-neutral-300') : (activeLayerId === layer.id ? 'text-blue-300' : 'text-neutral-600')}`}
+                      title={layer.visible ? 'Hide Layer' : 'Show Layer'}
+                    >
+                      {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
+                    </button>
+                    <input 
+                      type="text" 
+                      value={layer.name} 
+                      onChange={(e) => updateLayerName(activePanelId, layer.id, e.target.value)}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        (e.target as HTMLInputElement).readOnly = false;
+                        (e.target as HTMLInputElement).select();
+                      }}
+                      onBlur={(e) => {
+                        (e.target as HTMLInputElement).readOnly = true;
+                      }}
+                      readOnly
+                      className={`bg-transparent border-none outline-none flex-1 min-w-0 font-medium cursor-pointer focus:cursor-text focus:bg-white/10 focus:px-1 rounded ${activeLayerId === layer.id ? 'text-white' : 'text-neutral-300'} ${!layer.visible && 'italic opacity-60'}`}
+                      title="Double click to rename"
+                    />
+                  </div>
+                  
+                  <div className={`flex items-center gap-1 ${activeLayerId === layer.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                    <button onClick={(e) => { e.stopPropagation(); moveLayerUp(activePanelId, layer.id); }} disabled={index === 0} className="p-0.5 hover:bg-black/20 rounded disabled:opacity-30" title="Move Layer Up"><ChevronUp size={14} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); moveLayerDown(activePanelId, layer.id); }} disabled={index === array.length - 1} className="p-0.5 hover:bg-black/20 rounded disabled:opacity-30" title="Move Layer Down"><ChevronDown size={14} /></button>
+                    <button onClick={(e) => { e.stopPropagation(); removeLayer(activePanelId, layer.id); }} className={`p-0.5 rounded hover:bg-black/20 ${activeLayerId === layer.id ? 'text-blue-200 hover:text-white' : 'text-neutral-500 hover:text-red-400'}`} title="Delete Layer"><Trash2 size={12} /></button>
+                  </div>
+                </div>
+                
+                {activeLayerId === layer.id && (
+                  <div className="flex items-center gap-2 mt-1 px-1 border-t border-black/20 pt-1">
+                    <span className="text-[10px] text-blue-100">Opacity:</span>
+                    <input 
+                      type="range" 
+                      min="0" max="1" step="0.05" 
+                      value={layer.opacity ?? 1} 
+                      onChange={(e) => setLayerOpacity(activePanelId, layer.id, parseFloat(e.target.value))} 
+                      onClick={(e) => e.stopPropagation()}
+                      className="flex-1 h-1 bg-black/30 rounded-lg appearance-none cursor-pointer" 
+                    />
+                    <span className="text-[10px] text-blue-100 w-8 text-right font-mono">{Math.round((layer.opacity ?? 1) * 100)}%</span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+};
+
+// UI Helpers
+const ToolButton = ({ icon, active, onClick, onContextMenu, title }: { icon: React.ReactNode, active: boolean, onClick?: () => void, onContextMenu?: (e: React.MouseEvent) => void, title: string }) => (
+  <button 
+    onClick={onClick}
+    onContextMenu={onContextMenu}
+    title={title}
+    className={`p-2.5 rounded-lg transition-all ${active ? 'bg-blue-600 text-white shadow-inner' : 'text-neutral-400 hover:bg-[#444] hover:text-white'}`}
+  >
+    {icon}
+  </button>
+);
+
+const BrushButton = ({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) => (
+  <button
+    onClick={onClick}
+    className={`flex-1 flex flex-col items-center justify-center py-2 px-1 rounded border transition-all ${
+      active 
+        ? 'bg-[#3b82f6] border-blue-400 text-white shadow-inner' 
+        : 'bg-[#222] border-black text-neutral-400 hover:bg-[#333] hover:text-neutral-200'
+    }`}
+  >
+    {icon}
+    <span className="text-[10px] mt-1">{label}</span>
+  </button>
+);

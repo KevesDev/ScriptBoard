@@ -1,0 +1,8 @@
+# Normalize line endings for cross-platform (Linux CI + macOS + Windows)
+* text=auto eol=lf
+
+# Windows scripts
+*.{cmd,bat,ps1} text eol=crlf
+
+# Binary assets
+*.{png,jpg,jpeg,gif,webp,ico,icns,woff,woff2,ttf,eot,sbproj,zip} binary
