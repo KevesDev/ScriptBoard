@@ -18,6 +18,7 @@ import type {
   PanelTransition,
   PanelTransitionType,
   TimelineStoryboardClip,
+  TimelineAudioTrack,
 } from '@common/models';
 import { createDefaultTimeline, normalizeProject, newStoryboardTrack } from '@common/projectMigrate';
 import { cutTimelineRangeFromClips } from '../lib/audioClipOverlap';
@@ -131,6 +132,11 @@ interface ProjectState {
   updatePanelTimelineGapSec: (panelId: string, gapSec: number) => void;
   setAnimaticEditingMode: (enabled: boolean) => void;
   setTimelineOverwriteClips: (enabled: boolean) => void;
+
+  // New Track Management
+  addTimelineAudioTrack: () => void;
+  removeTimelineAudioTrack: (trackIndex: number) => void;
+
   addTimelineAudioClip: (trackIndex: number, clip: TimelineAudioClip) => void;
   updateTimelineAudioClip: (trackIndex: number, clipId: string, patch: Partial<TimelineAudioClip>) => void;
   removeTimelineAudioClip: (trackIndex: number, clipId: string) => void;
@@ -239,10 +245,8 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   setTimelinePlayheadSec: (sec) =>
     set({ timelinePlayheadSec: Math.max(0, Number.isFinite(sec) ? sec : 0) }),
 
-  // --- HIGH PERFORMANCE HISTORY TRACKING ---
   commitHistory: () => set((state) => {
     if (!state.project) return state;
-    // Uses Structural Sharing instead of deep cloning. Drops memory overhead by 90%
     const newStack = [...state.undoStack, state.project].slice(-50);
     return { undoStack: newStack, redoStack: [] };
   }),
@@ -262,7 +266,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     const newUndoStack = [...state.undoStack, state.project];
     return { project: nextProject, undoStack: newUndoStack, redoStack: newRedoStack };
   }),
-  // -----------------------------------------
 
   addScene: (scene) => 
     set((state) => {
@@ -620,12 +623,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => {
       if (!state.project) return state;
 
-      // Ensure we have a relatively valid HTML structure to avoid throwing errors on empty text
       if (!contentBase64 || contentBase64.trim() === '') {
          contentBase64 = '<p></p>';
       }
 
-      // A recursive function to find and update the page in the folder tree
       const updatePageInFolder = (folder: any): any => {
         return {
           ...folder,
@@ -652,7 +653,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     set((state) => {
       if (!state.project) return state;
 
-      // Extract Scene Headings to sync with Outliner
       const parser = new DOMParser();
       const doc = parser.parseFromString(contentBase64, 'text/html');
       
@@ -661,7 +661,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       let updatedScenes = [...state.project.scenes];
       let maxOrder = updatedScenes.length > 0 ? Math.max(...updatedScenes.map(s => s.order)) : 0;
 
-      // Track which valid scene headings are present in the document
       const currentValidHeadings = new Set<string>();
 
       sceneHeadingNodes.forEach(headingName => {
@@ -679,7 +678,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         }
       });
       
-      // ONLY prune scenes that have NO panels to prevent accidental data loss.
       updatedScenes = updatedScenes.filter(scene => {
          return currentValidHeadings.has(scene.name) || scene.panels.length > 0;
       });
@@ -699,7 +697,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       let targetPageId: string | null = null;
       let targetFolderId: string | null = null;
 
-      // 1. Check if page with same name exists
       const findPage = (folder: any) => {
         for (const child of folder.children) {
           if (child.type === 'page' && child.name === fileName) {
@@ -713,7 +710,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       };
       findPage(state.project.rootScriptFolder);
 
-      // Simple HTML parsing logic for imported text
       const lines = content.split(/\r?\n/);
       let htmlContent = '';
       for (let line of lines) {
@@ -722,11 +718,9 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           htmlContent += '<p></p>';
           continue;
         }
-        // Basic heuristics
         if (line.match(/^(INT\.|EXT\.|I\/E\.)\s/i)) {
           htmlContent += `<p class="scene-heading">${line}</p>`;
           
-          // Also sync to global scenes right on import
           if (!state.project.scenes.some(s => s.name === line)) {
             const maxOrder = state.project.scenes.length > 0 ? Math.max(...state.project.scenes.map(s => s.order)) : 0;
             state.project.scenes.push({
@@ -748,7 +742,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       }
 
       if (targetPageId) {
-        // Update existing page
         const updatePageInFolder = (folder: any): any => ({
           ...folder,
           children: folder.children.map((child: any) => {
@@ -766,7 +759,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
           activeScriptPageId: targetPageId
         };
       } else {
-        // Create new page in Drafts
         const draftsFolder = state.project.rootScriptFolder.children.find(c => c.type === 'folder' && c.name === 'Drafts');
         targetFolderId = draftsFolder ? draftsFolder.id : state.project.rootScriptFolder.id;
         
@@ -1034,6 +1026,40 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         project: {
           ...state.project,
           timeline: { ...state.project.timeline, overwriteClips: enabled },
+        },
+      };
+    }),
+
+  addTimelineAudioTrack: () =>
+    set((state) => {
+      if (!state.project?.timeline) return state;
+      const tl = state.project.timeline;
+      const newTrack: TimelineAudioTrack = {
+        id: crypto.randomUUID(),
+        name: `A${tl.audioTracks.length + 1}`,
+        muted: false,
+        solo: false,
+        locked: false,
+        clips: [],
+      };
+      return {
+        project: {
+          ...state.project,
+          timeline: { ...tl, audioTracks: [...tl.audioTracks, newTrack] },
+        },
+      };
+    }),
+
+  removeTimelineAudioTrack: (trackIndex: number) =>
+    set((state) => {
+      if (!state.project?.timeline) return state;
+      const tl = state.project.timeline;
+      if (tl.audioTracks.length <= 1) return state; 
+      const audioTracks = tl.audioTracks.filter((_, i) => i !== trackIndex);
+      return {
+        project: {
+          ...state.project,
+          timeline: { ...tl, audioTracks },
         },
       };
     }),

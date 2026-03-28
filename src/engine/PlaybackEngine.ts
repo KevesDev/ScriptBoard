@@ -1,4 +1,7 @@
 import type { TimelineAudioTrack, TimelineVideoTrack } from '@common/models';
+import { Logger } from '../lib/logger';
+
+const LOG_CAT = 'PlaybackEngine';
 
 export class PlaybackEngine {
   private static instance: PlaybackEngine | null = null;
@@ -26,7 +29,9 @@ export class PlaybackEngine {
   // React Sync Callback
   public onStop?: (finalTime: number) => void;
 
-  private constructor() {}
+  private constructor() {
+    Logger.info(LOG_CAT, 'Engine initialized.');
+  }
 
   public static getInstance(): PlaybackEngine {
     if (!PlaybackEngine.instance) {
@@ -42,6 +47,13 @@ export class PlaybackEngine {
   public attachDOM(playheadId: string, timecodeId: string) {
     this.playheadEl = document.getElementById(playheadId);
     this.timecodeEl = document.getElementById(timecodeId);
+
+    if (!this.playheadEl) {
+      Logger.warn(LOG_CAT, `Could not bind playhead. Element #${playheadId} not found in DOM.`);
+    }
+    if (!this.timecodeEl) {
+      Logger.warn(LOG_CAT, `Could not bind timecode. Element #${timecodeId} not found in DOM.`);
+    }
   }
 
   public updateState(config: {
@@ -62,9 +74,13 @@ export class PlaybackEngine {
 
   public play() {
     if (this.isPlaying) return;
+    
     if (this.currentTime >= this.duration && !this.loop) {
       this.currentTime = 0;
     }
+    
+    Logger.info(LOG_CAT, `Starting playback at ${this.currentTime.toFixed(3)}s`);
+    
     this.isPlaying = true;
     this.lastTime = performance.now();
     this.syncMedia(this.currentTime, true);
@@ -73,15 +89,27 @@ export class PlaybackEngine {
 
   public pause() {
     if (!this.isPlaying) return;
+    
+    Logger.info(LOG_CAT, `Pausing playback at ${this.currentTime.toFixed(3)}s`);
+    
     this.isPlaying = false;
     cancelAnimationFrame(this.rafId);
     this.syncMedia(this.currentTime, false);
     this.updateDOM(); 
-    if (this.onStop) this.onStop(this.currentTime);
+    
+    if (this.onStop) {
+      this.onStop(this.currentTime);
+    }
   }
 
   public seek(t: number) {
-    this.currentTime = Math.max(0, Math.min(t, this.duration));
+    const clampedTime = Math.max(0, Math.min(t, this.duration));
+    
+    if (Math.abs(this.currentTime - clampedTime) > 0.001) {
+      Logger.debug(LOG_CAT, `Seeking to ${clampedTime.toFixed(3)}s`);
+    }
+
+    this.currentTime = clampedTime;
     this.updateDOM();
     this.syncMedia(this.currentTime, this.isPlaying);
     this.broadcastTime(); // Force an immediate frame update to the WebGL canvas
@@ -101,6 +129,7 @@ export class PlaybackEngine {
     if (next >= this.duration) {
       if (this.loop && this.duration > 0) {
         next = next % this.duration;
+        Logger.debug(LOG_CAT, 'Looping playback to start.');
       } else {
         this.currentTime = this.duration;
         this.pause();
@@ -192,7 +221,11 @@ export class PlaybackEngine {
 
         if (playing) {
           if (Math.abs(el.currentTime - local) > 0.12) el.currentTime = local;
-          if (el.paused) void el.play().catch(() => {});
+          if (el.paused) {
+            el.play().catch((err) => {
+              Logger.warn(LOG_CAT, `Failed to play audio clip [${clip.id}]. Browser may be blocking autoplay.`, err);
+            });
+          }
         } else {
           if (!el.paused) el.pause();
           if (Math.abs(el.currentTime - local) > 0.05) el.currentTime = local;
@@ -216,7 +249,11 @@ export class PlaybackEngine {
 
         if (playing) {
           if (Math.abs(el.currentTime - local) > 0.12) el.currentTime = local;
-          if (el.paused) void el.play().catch(() => {});
+          if (el.paused) {
+            el.play().catch((err) => {
+              Logger.warn(LOG_CAT, `Failed to play video clip [${clip.id}]. Browser may be blocking autoplay.`, err);
+            });
+          }
         } else {
           if (!el.paused) el.pause();
           if (Math.abs(el.currentTime - local) > 0.05) el.currentTime = local;
@@ -226,6 +263,7 @@ export class PlaybackEngine {
   }
 
   public destroy() {
+    Logger.info(LOG_CAT, 'Destroying engine and clearing media cache.');
     this.pause();
     for (const el of this.audioMap.values()) { el.pause(); el.src = ''; }
     this.audioMap.clear();
