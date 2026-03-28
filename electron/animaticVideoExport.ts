@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { copyFile, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { fileURLToPath } from 'url';
 import type { AnimaticExportAudioClipPayload } from '../common/models';
 import {
   assertImageBufferMatchesExt,
@@ -21,15 +22,26 @@ export type AnimaticExportSegment = {
   durationSec: number;
 };
 
-// Extract the raw file path from our custom protocol
+// Extract the raw file path natively
 function resolveAssetPath(dataUri: string): string | null {
-  if (dataUri.startsWith('asset://')) {
-    return decodeURIComponent(dataUri.slice('asset://'.length));
+  if (!dataUri.startsWith('asset://')) return null;
+  
+  try {
+    let cleanUri = dataUri;
+    
+    // Dev fallback: Clean up any mangled URIs from our previous tests saved in the project file
+    if (cleanUri.startsWith('asset://local/')) {
+      cleanUri = cleanUri.replace('asset://local/', 'asset:///');
+    }
+    
+    // Native OS-aware conversion from URL back to physical path for FFmpeg
+    return fileURLToPath(cleanUri.replace('asset://', 'file://'));
+  } catch (err) {
+    console.error('Failed to resolve physical path from URI:', dataUri, err);
+    return null;
   }
-  return null;
 }
 
-// Kept for decoding storyboard panel drawings (which are correctly Base64)
 function decodeDataUriBase(dataUri: string, defaultMime: string): { mime: string; buffer: Buffer } {
   if (!dataUri.startsWith('data:')) throw new Error('Invalid data URI');
   const key = ';base64,';
@@ -179,7 +191,6 @@ export async function exportAnimaticVideo(params: {
       for (let k = 0; k < audioClips.length; k++) {
         const c = audioClips[k]!;
         
-        // Fail loudly if we are feeding Base64 to FFmpeg
         const assetPath = resolveAssetPath(c.dataUri);
         if (!assetPath) {
           throw new Error(`Strict Asset Pipeline Violation: Audio clip [${c.id}] is missing a valid asset:// path. Data URI received: ${c.dataUri.substring(0, 30)}...`);

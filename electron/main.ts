@@ -24,6 +24,7 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
+// Register our custom protocol to bypass CORS and stream local files
 protocol.registerSchemesAsPrivileged([
   { scheme: 'asset', privileges: { bypassCSP: true, supportFetchAPI: true, secure: true, standard: true, stream: true } }
 ]);
@@ -109,10 +110,15 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(() => {
-  // Native URL translation. 
-  // Maps "asset:///" back to "file:///" for direct OS streaming.
+  // Delegate everything to Node's native 'net.fetch'
   protocol.handle('asset', (request) => {
-    const fileUrl = request.url.replace('asset://', 'file://');
+    let fileUrl = request.url.replace('asset://', 'file://');
+    
+    // Safety check to sanitize any broken links saved during our previous tests
+    if (fileUrl.startsWith('file://local/')) {
+      fileUrl = fileUrl.replace('file://local/', 'file:///');
+    }
+    
     return net.fetch(fileUrl);
   });
 
@@ -392,7 +398,6 @@ ipcMain.handle(IPC_CHANNELS.DIALOG_BOX, async (event, payload: DialogBoxPayload)
   return { ok: r.response === 0 }
 })
 
-
 ipcMain.handle(IPC_CHANNELS.AUDIO_IMPORT, async (_event) => {
   if (!win) return { success: false, message: 'No window found' };
   try {
@@ -411,9 +416,8 @@ ipcMain.handle(IPC_CHANNELS.AUDIO_IMPORT, async (_event) => {
     const filePath = filePaths[0];
     const fileName = filePath.split('\\').pop()?.split('/').pop() || 'Imported Audio';
     
-    // Native URL routing.
-    // Converts physical path to file:/// then transforms to asset:///
-    const fileUrl = pathToFileURL(filePath).href;
+    // Use Node's native pathToFileURL to generate standard syntax
+    const fileUrl = pathToFileURL(filePath).href; // file:///D:/path...
     const dataUri = fileUrl.replace('file://', 'asset://');
 
     return { success: true, message: 'Audio imported', data: { dataUri, fileName } };
@@ -444,8 +448,8 @@ ipcMain.handle(IPC_CHANNELS.VIDEO_IMPORT, async (_event) => {
     const filePath = filePaths[0];
     const fileName = filePath.split('\\').pop()?.split('/').pop() || 'Imported Video';
     
-    // Native URL routing
-    const fileUrl = pathToFileURL(filePath).href;
+    // Use Node's native pathToFileURL to generate standard syntax
+    const fileUrl = pathToFileURL(filePath).href; 
     const dataUri = fileUrl.replace('file://', 'asset://');
 
     return { success: true, message: 'Video imported', data: { dataUri, fileName } };

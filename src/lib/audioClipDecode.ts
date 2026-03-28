@@ -1,6 +1,9 @@
 export async function decodeAudioFromDataUri(dataUri: string): Promise<AudioBuffer> {
+  // Because the backend provides a valid `asset://local/D%3A...` URL, 
+  // we can simply pass it to fetch without any string replacements!
   const res = await fetch(dataUri);
   const arrayBuffer = await res.arrayBuffer();
+  
   const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
   return await audioCtx.decodeAudioData(arrayBuffer);
 }
@@ -9,6 +12,7 @@ export function downsamplePeaks(buf: AudioBuffer, samples: number): number[] {
   const channelData = buf.getChannelData(0);
   const blockSize = Math.floor(channelData.length / samples);
   const peaks: number[] = [];
+  
   for (let i = 0; i < samples; i++) {
     const start = i * blockSize;
     let max = 0;
@@ -18,19 +22,20 @@ export function downsamplePeaks(buf: AudioBuffer, samples: number): number[] {
     }
     peaks.push(max);
   }
+  
   return peaks;
 }
 
 /**
  * Spins up a Web Worker using Vite's native URL resolution to process peaks
- * on a background CPU core, prevents the UI from freezing.
+ * on a background CPU core, preventing the UI from freezing.
  */
 export function generatePeaksAsync(buf: AudioBuffer, targetSamples: number): Promise<number[]> {
   return new Promise((resolve) => {
     try {
       const channelData = buf.getChannelData(0);
       
-      // Clone the channel data - transferring it directly from the AudioBuffer 
+      // Clone the channel data because transferring it directly from the AudioBuffer 
       // might detach it and break future playback.
       const dataCopy = new Float32Array(channelData);
 
@@ -46,12 +51,12 @@ export function generatePeaksAsync(buf: AudioBuffer, targetSamples: number): Pro
 
       worker.onerror = (err) => {
         console.error('Waveform Worker Error:', err);
-        // Safety fallback to synchronous execution if the worker fails
+        // Safe fallback to synchronous execution if the worker fails
         resolve(downsamplePeaks(buf, targetSamples));
         worker.terminate();
       };
 
-      // Send the data using our nice high-performance memory transfer
+      // Send the data using high-performance memory transfer
       worker.postMessage({ channelData: dataCopy, targetSamples }, [dataCopy.buffer]);
     } catch (error) {
       console.warn('Falling back to synchronous peak generation.', error);
