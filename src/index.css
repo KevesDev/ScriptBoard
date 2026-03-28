@@ -39,121 +39,31 @@ body {
   }
 }
 
-/* Screenplay: Courier Prime (loaded from Google Fonts in index.html) */
-/* Print layout: paginated script (page breaks inserted by editor). */
-.screenplay-editor.script-print-paginated .prose [data-page-break] + *,
-.screenplay-editor.script-print-paginated .prose .script-page-break + * {
-  padding-top: 1in;
-}
-
-/*
- * Page gap: keep document flow predictable (~40px band). The gray “rail” is painted in ::before so
- * pagination measurements don’t swing with huge padding/margins on the break node (reduces flicker).
+/* * =========================================================
+ * SCREENPLAY FORMATTING
+ * =========================================================
  */
-.screenplay-editor.script-print-paginated .prose [data-page-break],
-.screenplay-editor.script-print-paginated [data-page-break] {
-  display: block !important;
-  position: relative;
-  box-sizing: border-box !important;
-  height: 0 !important;
-  min-height: 0 !important;
-  margin: 0 !important;
-  padding: 20px 0 !important;
-  overflow: visible !important;
-  clear: both !important;
-  user-select: none !important;
-  pointer-events: none !important;
-  left: auto !important;
-  width: auto !important;
-  max-width: none !important;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
-.screenplay-editor.script-print-paginated .prose [data-page-break]::before,
-.screenplay-editor.script-print-paginated [data-page-break]::before {
-  content: "";
-  position: absolute;
-  left: -1in;
-  width: calc(100% + 2in);
-  top: 0;
-  bottom: 0;
-  box-sizing: border-box;
-  /* tailwind zinc-600 — matches ScriptEditor print scroll area */
-  background: rgb(82 82 91) !important;
-  border-top: 1px solid rgba(0, 0, 0, 0.32) !important;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.28) !important;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07) !important;
-  pointer-events: none;
-}
-
-.screenplay-editor.script-print-paginated .prose [data-page-break]::after,
-.screenplay-editor.script-print-paginated [data-page-break]::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  width: 5rem;
-  max-width: 90%;
-  border-top: 1px dashed rgba(255, 255, 255, 0.22);
-  pointer-events: none;
-}
-
-/* Fallback when pageBreak appears outside print layout (should be rare). */
-.script-page-break {
-  display: block;
-  clear: both;
-  user-select: none;
-}
-
 .screenplay-editor,
 .screenplay-editor .ProseMirror {
   font-family: "Courier Prime", Courier, "Courier New", monospace !important;
   font-size: var(--script-font-size, 14px) !important;
   line-height: 1.2 !important;
 }
+
 .screenplay-editor .prose {
   font-size: inherit !important;
 }
+
+/* Base override to kill Tailwind's default prose margins */
 .screenplay-editor .prose p,
 .screenplay-editor .prose div {
   font-size: inherit !important;
+  margin: 0 !important;
+  padding: 0 !important;
 }
 
-/* Tailwind Typography adds spacing between `.prose` paragraphs; screenplay nodes set their own rhythm. */
-.screenplay-editor .prose > p.parenthetical,
-.screenplay-editor .prose p.character + p.parenthetical,
-.screenplay-editor .prose p + p.parenthetical {
-  margin-top: 0 !important;
-  margin-block-start: 0 !important;
-  padding-left: 0 !important;
-  padding-inline-start: 0 !important;
-  text-indent: 0 !important;
-}
-
-/* Dialogue → parenthetical: strip the band that looked like a blank line above (beat). */
-.screenplay-editor .prose p.dialogue:has(+ p.parenthetical) {
-  margin-bottom: 0 !important;
-  margin-block-end: 0 !important;
-}
-.screenplay-editor .prose p.dialogue + p.parenthetical {
-  margin-top: 0 !important;
-  margin-block-start: 0 !important;
-}
-
-/* Parenthetical → dialogue: same tight stack */
-.screenplay-editor .prose p.parenthetical + p.dialogue {
-  margin-top: 0 !important;
-  margin-block-start: 0 !important;
-}
-.screenplay-editor .prose p.parenthetical:has(+ p.dialogue) {
-  margin-bottom: 0 !important;
-  margin-block-end: 0 !important;
-}
-
-.scene-heading {
+/* Scene Headings: 2 blank lines before, 1 after */
+.screenplay-editor .prose .scene-heading {
   text-transform: uppercase;
   font-weight: bold;
   margin-top: 2rem !important;
@@ -162,22 +72,24 @@ body {
   margin-right: 0 !important;
 }
 
-.action {
+/* Action: 1 blank line before, 1 after */
+.screenplay-editor .prose .action {
   margin-top: 1rem !important;
   margin-bottom: 1rem !important;
   margin-left: 0 !important;
   margin-right: 0 !important;
 }
 
-.character {
+/* Character: 1 blank line before, 0 after. Indented 35% */
+.screenplay-editor .prose .character {
   text-transform: uppercase;
   margin-top: 1rem !important;
   margin-bottom: 0 !important;
   margin-left: 35% !important;
 }
 
-/* Same left edge as .character so the opening ( isn’t offset with a visual “gap”. */
-.parenthetical {
+/* Parenthetical: 0 lines before, 0 after. Indented tightly under Character */
+.screenplay-editor .prose .parenthetical {
   margin-top: 0 !important;
   margin-bottom: 0 !important;
   margin-left: 35% !important;
@@ -187,14 +99,16 @@ body {
   text-indent: 0 !important;
 }
 
-.dialogue {
+/* Dialogue: 0 lines before, 1 after. Indented 18% from both sides */
+.screenplay-editor .prose .dialogue {
   margin-top: 0 !important;
   margin-bottom: 1rem !important;
   margin-left: 18% !important;
   margin-right: 18% !important;
 }
 
-.transition {
+/* Transition: 1.5 lines before, 1.5 after. Flush right. */
+.screenplay-editor .prose .transition {
   text-transform: uppercase;
   text-align: right;
   margin-top: 1.5rem !important;
@@ -203,6 +117,15 @@ body {
   margin-right: 0 !important;
 }
 
+/* Prevent the very first line of a page from having a top margin so it aligns perfectly */
+.screenplay-editor .prose > *:first-child {
+  margin-top: 0 !important;
+}
+
+/* * =========================================================
+ * STORYBOARD & CANVAS
+ * =========================================================
+ */
 /* Storyboard canvas: grid behind transparent WebGL so empty areas read as “no ink”, not white paper. */
 .sb-canvas-transparency-grid {
   background-color: #262626;
@@ -219,6 +142,10 @@ body {
     -6px 0px;
 }
 
+/* * =========================================================
+ * UI UTILITIES
+ * =========================================================
+ */
 /* Custom Scrollbars */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;

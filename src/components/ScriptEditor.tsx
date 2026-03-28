@@ -21,6 +21,7 @@ import {
   Plus,
   X,
   MessageCircle,
+  PenLine,
 } from 'lucide-react';
 import { useProjectStore } from '../store/projectStore';
 import { useAppStore } from '../store/appStore';
@@ -429,9 +430,9 @@ export const ScriptEditor: React.FC = () => {
     () => [
       Action,
       StarterKit.configure({
-        listItem: false, // Disable default ListItem to allow custom script blocks
+        listItem: false, 
       }),
-      CustomListItem,    // Inject our upgraded block+ ListItem
+      CustomListItem,    
       Underline,
       TextStyle,
       Color,
@@ -461,7 +462,7 @@ export const ScriptEditor: React.FC = () => {
       Transition,
       ScreenplayPagination.configure({
         getEnabled: () => paginationEnabledRef.current,
-        pageBodyHeightPx: 96 * 9 - 52,
+        pageBodyHeightPx: 864,
       }),
       ScreenplayTabCycle,
       ScreenplayDefaultEnter,
@@ -819,36 +820,34 @@ export const ScriptEditor: React.FC = () => {
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e] text-neutral-200 overflow-hidden font-sans">
       {/* Document Tabs */}
-      <div className="flex items-center bg-[#282828] border-b border-black overflow-x-auto shrink-0 select-none">
+      <div className="flex items-center bg-[#282828] border-b border-black overflow-x-auto shrink-0 select-none group">
         {allPages.map(page => (
           <div 
             key={page.id} 
             onMouseDown={(e) => e.stopPropagation()}
             onClick={() => setActiveScriptPageId(page.id)}
-            onDoubleClick={(e) => {
-              e.stopPropagation();
-              setEditingTabId(page.id);
-              setEditingTabName(page.name);
-            }}
-            className={`px-4 py-2 text-[13px] font-medium cursor-pointer border-r border-black flex items-center gap-2 transition-colors ${activeScriptPageId === page.id ? 'bg-[#323232] text-white border-t-2 border-t-blue-500' : 'bg-[#282828] text-neutral-400 hover:bg-[#323232] border-t-2 border-t-transparent'}`}
+            className={`px-4 py-2 text-[13px] font-medium cursor-pointer border-r border-black flex items-center gap-2 transition-colors relative group/tab ${activeScriptPageId === page.id ? 'bg-[#323232] text-white border-t-2 border-t-blue-500' : 'bg-[#282828] text-neutral-400 hover:bg-[#323232] border-t-2 border-t-transparent'}`}
           >
             {editingTabId === page.id ? (
               <input 
                 autoFocus
+                onFocus={(e) => e.target.select()}
                 maxLength={30}
                 value={editingTabName}
                 onChange={e => setEditingTabName(e.target.value)}
                 onBlur={() => {
-                  if (editingTabName.trim() !== '') {
-                    updateNodeName(page.id, editingTabName.trim());
+                  const trimmed = editingTabName.trim();
+                  if (trimmed !== '' && trimmed !== page.name) {
+                    updateNodeName(page.id, trimmed);
                   }
                   setEditingTabId(null);
                 }}
                 onKeyDown={e => {
                   e.stopPropagation();
                   if (e.key === 'Enter') {
-                    if (editingTabName.trim() !== '') {
-                      updateNodeName(page.id, editingTabName.trim());
+                    const trimmed = editingTabName.trim();
+                    if (trimmed !== '' && trimmed !== page.name) {
+                      updateNodeName(page.id, trimmed);
                     }
                     setEditingTabId(null);
                   } else if (e.key === 'Escape') {
@@ -857,22 +856,33 @@ export const ScriptEditor: React.FC = () => {
                 }}
                 className="bg-[#151515] text-white px-1 outline-none w-24 rounded border border-blue-500"
                 onClick={e => e.stopPropagation()}
-                onDoubleClick={e => e.stopPropagation()}
                 onMouseDown={e => e.stopPropagation()}
               />
             ) : (
-              <span className="whitespace-nowrap select-none" onDoubleClick={(e) => {
-                e.stopPropagation();
-                setEditingTabId(page.id);
-                setEditingTabName(page.name);
-              }}>{page.name}</span>
+              <div className="flex items-center gap-1.5">
+                <span className="whitespace-nowrap select-none">{page.name}</span>
+                {/* AAA FIX: Explicitly bound to onClick to ensure full focus capture */}
+                <button 
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setEditingTabId(page.id);
+                    setEditingTabName(page.name);
+                  }}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  className={`p-1 hover:bg-black/30 rounded text-neutral-400 hover:text-white ${activeScriptPageId === page.id ? 'opacity-100' : 'opacity-0 group-hover/tab:opacity-100'}`}
+                  title="Rename Document"
+                >
+                  <PenLine size={12} />
+                </button>
+              </div>
             )}
             <button 
               onClick={(e) => { 
                 e.stopPropagation(); 
                 void handleDeleteScriptPage(page); 
               }} 
-              className={`p-0.5 rounded hover:bg-black/30 hover:text-red-400 ${activeScriptPageId === page.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+              className={`p-0.5 rounded hover:bg-black/30 hover:text-red-400 ml-1 ${activeScriptPageId === page.id ? 'opacity-100' : 'opacity-0 group-hover/tab:opacity-100'}`}
               title="Close/Delete Page"
             >
               <X size={14}/>
@@ -899,8 +909,8 @@ export const ScriptEditor: React.FC = () => {
         <div 
           className={
             scriptLayout === 'print'
-              ? 'flex-1 overflow-y-auto p-8 bg-zinc-600 border-l border-r border-black shadow-inner'
-              : 'flex-1 overflow-y-auto p-12 bg-[#151515] border-l border-r border-black shadow-inner'
+              ? 'flex-1 overflow-y-auto p-8 bg-zinc-600 border-l border-r border-black shadow-inner custom-scrollbar'
+              : 'flex-1 overflow-y-auto p-12 bg-[#151515] border-l border-r border-black shadow-inner custom-scrollbar'
           }
           onMouseDown={(e) => {
             const el = e.target as HTMLElement;
@@ -1006,7 +1016,7 @@ export const ScriptEditor: React.FC = () => {
              </div>
            </div>
            
-           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-[#323232]">
+           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-[#323232] custom-scrollbar">
               {activeRightTab === 'documents' && (
                 <div className="flex flex-col gap-2 h-full text-sm">
                   <div className="flex justify-between items-center mb-2">
@@ -1019,7 +1029,7 @@ export const ScriptEditor: React.FC = () => {
                     {allPages.map(page => (
                       <div 
                         key={page.id}
-                        className={`flex items-center justify-between p-2 rounded cursor-pointer border transition-colors ${activeScriptPageId === page.id ? 'bg-[#3b82f6] border-blue-400 text-white shadow-sm' : 'bg-[#282828] border-black text-neutral-400 hover:bg-[#333]'}`}
+                        className={`flex items-center justify-between p-2 rounded cursor-pointer border transition-colors group/item ${activeScriptPageId === page.id ? 'bg-[#3b82f6] border-blue-400 text-white shadow-sm' : 'bg-[#282828] border-black text-neutral-400 hover:bg-[#333]'}`}
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={() => setActiveScriptPageId(page.id)}
                       >
@@ -1029,20 +1039,23 @@ export const ScriptEditor: React.FC = () => {
                           {editingTabId === page.id ? (
                             <input 
                               autoFocus
+                              onFocus={(e) => e.target.select()}
                               maxLength={30}
                               value={editingTabName}
                               onChange={e => setEditingTabName(e.target.value)}
                               onBlur={() => {
-                                if (editingTabName.trim() !== '') {
-                                  updateNodeName(page.id, editingTabName.trim());
+                                const trimmed = editingTabName.trim();
+                                if (trimmed !== '' && trimmed !== page.name) {
+                                  updateNodeName(page.id, trimmed);
                                 }
                                 setEditingTabId(null);
                               }}
                               onKeyDown={e => {
                                 e.stopPropagation();
                                 if (e.key === 'Enter') {
-                                  if (editingTabName.trim() !== '') {
-                                    updateNodeName(page.id, editingTabName.trim());
+                                  const trimmed = editingTabName.trim();
+                                  if (trimmed !== '' && trimmed !== page.name) {
+                                    updateNodeName(page.id, trimmed);
                                   }
                                   setEditingTabId(null);
                                 } else if (e.key === 'Escape') {
@@ -1051,15 +1064,26 @@ export const ScriptEditor: React.FC = () => {
                               }}
                               className="bg-[#151515] text-white px-1 outline-none w-full rounded border border-blue-500"
                               onClick={e => e.stopPropagation()}
-                              onDoubleClick={e => e.stopPropagation()}
                               onMouseDown={e => e.stopPropagation()}
                             />
                           ) : (
-                            <div className="truncate select-none" title="Double click to rename" onDoubleClick={(e) => {
-                              e.stopPropagation();
-                              setEditingTabId(page.id);
-                              setEditingTabName(page.name);
-                            }}>{page.name}</div>
+                            <div className="flex items-center gap-1.5">
+                              <div className="truncate select-none">{page.name}</div>
+                              {/* AAA FIX: Explicitly bound to onClick to ensure full focus capture */}
+                              <button 
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setEditingTabId(page.id);
+                                  setEditingTabName(page.name);
+                                }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                                className={`p-1 hover:bg-black/30 rounded text-neutral-400 hover:text-white ${activeScriptPageId === page.id ? 'opacity-100' : 'opacity-0 group-hover/item:opacity-100'}`}
+                                title="Rename Document"
+                              >
+                                <PenLine size={12} />
+                              </button>
+                            </div>
                           )}
                         </div>
                         {editingTabId !== page.id && (
@@ -1136,7 +1160,7 @@ export const ScriptEditor: React.FC = () => {
                   <textarea 
                     value={project?.settings?.notes || ''}
                     onChange={(e) => updateProjectSettings({ notes: e.target.value })}
-                    className="flex-1 w-full bg-[#282828] border border-black rounded p-3 text-neutral-300 text-sm resize-none focus:outline-none focus:border-blue-500 shadow-inner"
+                    className="flex-1 w-full bg-[#282828] border border-black rounded p-3 text-neutral-300 text-sm resize-none focus:outline-none focus:border-blue-500 shadow-inner custom-scrollbar"
                     placeholder="Jot down quick ideas, dialogue snippets, or structural notes here..."
                   />
                 </div>
@@ -1190,7 +1214,7 @@ export const ScriptEditor: React.FC = () => {
                               applyCommentAttrsById(ed, activeCommentId, { text: newText, timestamp: Date.now() });
                             }
                           }}
-                          className="w-full h-32 bg-[#151515] border border-black rounded p-1.5 text-white text-xs resize-none"
+                          className="w-full h-32 bg-[#151515] border border-black rounded p-1.5 text-white text-xs resize-none custom-scrollbar"
                         />
                       </div>
                       <button 

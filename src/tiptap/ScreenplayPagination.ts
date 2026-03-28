@@ -17,7 +17,7 @@ function domBlockHeight(view: EditorView, pos: number): number {
   let el = view.nodeDOM(pos) as HTMLElement | null;
   if (!el || el.nodeType !== 1) {
     try {
-      const { node } = view.domAtPos(pos, 1);
+      const { node } = view.domAtPos(pos);
       let n: Node | null = node;
       if (n?.nodeType === Node.TEXT_NODE) n = n.parentElement;
       el = n as HTMLElement | null;
@@ -31,13 +31,12 @@ function domBlockHeight(view: EditorView, pos: number): number {
   if (!el || el.nodeType !== 1) return 0;
   
   const cs = window.getComputedStyle(el);
-  const mt = parseFloat(cs.marginTop) || 0;
   const mb = parseFloat(cs.marginBottom) || 0;
-  return el.offsetHeight + mt + mb;
+  return el.offsetHeight + mb;
 }
 
 /**
- * AAA Layout Engine: Calculates where page breaks SHOULD be visually 
+ * Layout Engine: Calculates where page breaks SHOULD be visually 
  * rendered without ever modifying the underlying document data.
  */
 function calculatePagination(view: EditorView, pageBodyHeightPx: number): DecorationSet {
@@ -45,9 +44,7 @@ function calculatePagination(view: EditorView, pageBodyHeightPx: number): Decora
   
   // 1. Map the heights of all root-level nodes
   view.state.doc.forEach((node, offset) => {
-    // AAA FIX: offset + 1 ensures we target the absolute position of the node itself
-    // placing the decoration safely BETWEEN blocks instead of inside them.
-    const pos = offset + 1; 
+    const pos = offset; 
     let h = domBlockHeight(view, pos);
     if (h <= 0) h = 24; // Fallback height if not fully rendered yet
     blocks.push({ pos, height: h, type: node.type.name });
@@ -73,37 +70,33 @@ function calculatePagination(view: EditorView, pageBodyHeightPx: number): Decora
         }
       }
 
-      // Safety: Never put a page break before the very first node
+      // Safety: Never put a page break before the very first node!
       if (breakIdx === 0) breakIdx = 1;
 
       pageNum++;
       const breakPos = blocks[breakIdx].pos;
       
-      // 3. Generate the "Ghost" Page Break Decoration using a factory function
-      // This prevents ProseMirror from dropping the DOM node during fast typing
+      // 3. Generate the "Ghost" Page Break Decoration
       decos.push(Decoration.widget(breakPos, () => {
         const widget = document.createElement('div');
-        widget.className = 'script-page-break-decorator select-none pointer-events-none';
+        widget.className = 'script-page-break-decorator';
         widget.contentEditable = 'false'; // Prevents cursor from entering the gap
         
-        // AAA FIX: Using transform to bleed into padding guarantees it won't be clipped
+        // Sleek, thin <hr> style break. Negative margins slice it cleanly across the padding.
         widget.style.cssText = `
-          height: 36px;
-          background: #f3f4f6;
-          width: calc(100% + 2in);
-          transform: translateX(-1in);
-          margin: 2rem 0;
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          padding-right: 1in;
-          border-top: 2px dashed #9ca3af;
-          border-bottom: 2px dashed #9ca3af;
+          height: 2px;
+          background-color: #d4d4d8; 
+          margin-top: 1.5rem;
+          margin-bottom: 1.5rem;
+          margin-left: -1in;
+          margin-right: -1in;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.1);
           position: relative;
           z-index: 50;
           user-select: none;
+          pointer-events: none;
         `;
-        widget.innerHTML = `<span style="font-family: 'Courier Prime', Courier, monospace; font-size: 12px; color: #6b7280; font-weight: bold;">PAGE ${pageNum}</span>`;
+        
         return widget;
       }, { side: -1, key: `page-break-${pageNum}` }));
 
@@ -126,7 +119,7 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
   addOptions() {
     return {
       getEnabled: () => false,
-      pageBodyHeightPx: 96 * 9 - 52,
+      pageBodyHeightPx: 864, // 11 inches minus 1-inch top/bottom margins
     };
   },
 
@@ -153,28 +146,32 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
         key: screenplayPaginationKey,
         state: {
           init() {
-            return DecorationSet.empty;
+            return { decos: DecorationSet.empty, recalcId: 0 };
           },
-          apply(tr, oldState) {
+          apply(tr, value) {
             const meta = tr.getMeta(screenplayPaginationKey);
             if (meta?.clear) {
-              return DecorationSet.empty;
+              return { decos: DecorationSet.empty, recalcId: value.recalcId };
+            }
+            if (meta?.forceRecalc) {
+              return { decos: value.decos.map(tr.mapping, tr.doc), recalcId: value.recalcId + 1 };
             }
             if (meta?.decos !== undefined) {
-              return meta.decos;
+              return { decos: meta.decos, recalcId: value.recalcId };
             }
             // Map decorations securely through document changes so they don't break while typing
-            return oldState.map(tr.mapping, tr.doc);
+            return { decos: value.decos.map(tr.mapping, tr.doc), recalcId: value.recalcId };
           }
         },
         props: {
           decorations(state) {
-            return this.getState(state);
+            return this.getState(state).decos;
           }
         },
         view: (view: EditorView) => {
           let debounceTimer: ReturnType<typeof setTimeout> | null = null;
           let isDestroyed = false;
+          let lastRecalcId = screenplayPaginationKey.getState(view.state).recalcId;
 
           const runLayoutEngine = () => {
             if (isDestroyed || !view.dom.isConnected) return;
@@ -201,17 +198,19 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
           schedule();
 
           return {
-            update: (updatedView) => {
-              const meta = updatedView.state.tr.getMeta(screenplayPaginationKey);
-              if (meta?.forceRecalc) {
-                runLayoutEngine();
+            update: (updatedView, prevState) => {
+              const state = screenplayPaginationKey.getState(updatedView.state);
+              if (state.recalcId !== lastRecalcId) {
+                lastRecalcId = state.recalcId;
+                schedule();
                 return;
               }
               
-              // Only schedule the Layout Engine if the user actually typed/deleted content.
-              // This guarantees zero infinite loops!
-              if (!updatedView.state.tr.docChanged) return;
-              schedule();
+              // Check if the document data changed during this exact transaction.
+              // If true, the user typed/pasted text, so we schedule the Layout Engine.
+              if (prevState.doc !== updatedView.state.doc) {
+                schedule();
+              }
             },
             destroy: () => {
               isDestroyed = true;
