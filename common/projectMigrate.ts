@@ -75,7 +75,7 @@ export function createDefaultTimeline(): ProjectTimeline {
     animaticEditingMode: false,
     overwriteClips: false,
     storyboardTracks: [newStoryboardTrack(0, 'Layer 1')],
-    audioTracks: [newTrack(), newTrack()],
+    audioTracks: [newTrack()], // Changed from [newTrack(), newTrack()] to [newTrack()]
     videoTracks: [newVideoTrack()],
     sequences: defaultSequences(),
     acts: [],
@@ -95,7 +95,7 @@ export function validateAndSortTimeline(
 ): ProjectTimeline {
   let tracks = [...timeline.audioTracks];
   if (tracks.length === 0) {
-    tracks = [newTrack(), newTrack()];
+    tracks = [newTrack()]; // Changed from [newTrack(), newTrack()] to [newTrack()]
   }
 
   const soloCount = tracks.filter((t) => t.solo).length;

@@ -1,6 +1,6 @@
-import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, Menu, clipboard, protocol, net } from 'electron'
 import { join, dirname } from 'path'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 import * as fs from 'fs/promises'
 import { IPC_CHANNELS } from '../common/ipc'
 import type { AnimaticExportAudioClipPayload } from '../common/models'
@@ -11,25 +11,23 @@ import ffmpegStatic from 'ffmpeg-static'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-/** FFmpeg must run from disk; packaged apps unpack `ffmpeg-static` under app.asar.unpacked. */
 function ffmpegExecutablePath(): string | null {
   if (!ffmpegStatic) return null
   return ffmpegStatic.replace(/app\.asar([/\\])/, 'app.asar.unpacked$1')
 }
 
-// Robust global error handling for the main process
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
-  // In a full production app, you might want to log this to a file
 });
 
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Packaged layout (electron-builder + asar): app.getAppPath() → .../app.asar
-// with dist/index.html and dist-electron/main.js inside it. Resolving the UI via
-// getAppPath() keeps file:// loads correct on any drive and for portable builds.
+// IMPORTANT: Register our custom protocol to bypass CORS and stream local files
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'asset', privileges: { bypassCSP: true, supportFetchAPI: true, secure: true, standard: true, stream: true } }
+]);
 
 let win: BrowserWindow | null = null
 const preload = join(__dirname, 'preload.cjs')
@@ -47,13 +45,13 @@ function createWindow() {
       preload,
       nodeIntegration: false,
       contextIsolation: true,
+      webSecurity: true,
     },
   })
 
   if (process.env.VITE_DEV_SERVER_URL) {
     process.env.VITE_PUBLIC = join(appPath, 'public')
     win.loadURL(process.env.VITE_DEV_SERVER_URL)
-    // win.webContents.openDevTools()
   } else {
     const distDir = join(appPath, 'dist')
     process.env.DIST = distDir
@@ -61,8 +59,6 @@ function createWindow() {
     win.loadFile(join(distDir, 'index.html'))
   }
 
-  // Electron does not show a default text context menu; without this, Cut/Copy/Paste never appear
-  // for contenteditable (e.g. TipTap script editor).
   win.webContents.on('context-menu', (_event, params) => {
     const w = win
     if (!w) return
@@ -78,8 +74,6 @@ function createWindow() {
     }
 
     const ef = params.editFlags
-    // Prefer isEditable; some Chromium builds under-report it for contenteditable (TipTap) while
-    // cut/paste flags still reflect the real editing surface.
     const showTextEditingMenu = params.isEditable || ef.canCut || ef.canPaste
 
     if (showTextEditingMenu) {
@@ -116,16 +110,17 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(() => {
+  // Catch the custom protocol and stream the physical file directly
+  protocol.handle('asset', (request) => {
+    const filePath = decodeURIComponent(request.url.slice('asset://'.length));
+    return net.fetch(pathToFileURL(filePath).toString());
+  });
+
   createWindow()
 })
 
-// To handle direct saves without asking for a file path every time, 
-// we need to keep track of the current active project's file path on the backend.
-// Since the frontend might not securely know its own file path in a standard way,
-// we'll store a map of project ID to file path here.
 const projectPaths = new Map<string, string>();
 
-// IPC channels implementation
 ipcMain.handle(IPC_CHANNELS.PROJECT_SAVE, async (_event, project) => {
   if (!win) return { success: false, message: 'No window found' }
   try {
@@ -190,7 +185,6 @@ ipcMain.handle(IPC_CHANNELS.PROJECT_LOAD, async (_event) => {
 
     const project = await ProjectArchiver.loadProject(filePaths[0])
     
-    // Remember where we loaded it from so we can save back to it
     if (project && project.id) {
       projectPaths.set(project.id, filePaths[0]);
     }
@@ -398,6 +392,10 @@ ipcMain.handle(IPC_CHANNELS.DIALOG_BOX, async (event, payload: DialogBoxPayload)
   return { ok: r.response === 0 }
 })
 
+// === HIGH PERFORMANCE ASSET PIPELINE ===
+// We no longer read massive files into Base64 strings. We just hand the absolute path
+// directly to the frontend wrapped in our custom "asset://" protocol!
+
 ipcMain.handle(IPC_CHANNELS.AUDIO_IMPORT, async (_event) => {
   if (!win) return { success: false, message: 'No window found' };
   try {
@@ -413,15 +411,9 @@ ipcMain.handle(IPC_CHANNELS.AUDIO_IMPORT, async (_event) => {
       return { success: false, message: 'Import canceled' };
     }
 
-    const buffer = await fs.readFile(filePaths[0]);
-    const base64 = buffer.toString('base64');
-    const fileName = filePaths[0].split('\\').pop()?.split('/').pop() || 'Imported Audio';
-    // Determine mime type
-    let mimeType = 'audio/mpeg';
-    if (fileName.toLowerCase().endsWith('.wav')) mimeType = 'audio/wav';
-    else if (fileName.toLowerCase().endsWith('.ogg')) mimeType = 'audio/ogg';
-
-    const dataUri = `data:${mimeType};base64,${base64}`;
+    const filePath = filePaths[0];
+    const fileName = filePath.split('\\').pop()?.split('/').pop() || 'Imported Audio';
+    const dataUri = `asset://${encodeURIComponent(filePath)}`;
 
     return { success: true, message: 'Audio imported', data: { dataUri, fileName } };
   } catch (error) {
@@ -430,10 +422,39 @@ ipcMain.handle(IPC_CHANNELS.AUDIO_IMPORT, async (_event) => {
   }
 });
 
+ipcMain.handle(IPC_CHANNELS.VIDEO_IMPORT, async (_event) => {
+  if (!win) return { success: false, message: 'No window found' };
+  try {
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: 'Import Video',
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Video',
+          extensions: ['mp4', 'webm', 'mov', 'm4v', 'mkv'],
+        },
+      ],
+    });
+
+    if (canceled || filePaths.length === 0) {
+      return { success: false, message: 'Import canceled' };
+    }
+
+    const filePath = filePaths[0];
+    const fileName = filePath.split('\\').pop()?.split('/').pop() || 'Imported Video';
+    const dataUri = `asset://${encodeURIComponent(filePath)}`;
+
+    return { success: true, message: 'Video imported', data: { dataUri, fileName } };
+  } catch (error) {
+    console.error('Video import error:', error);
+    return { success: false, message: (error as Error).message };
+  }
+});
+
 ipcMain.handle(
   IPC_CHANNELS.ANIMATIC_EXPORT_VIDEO,
   async (
-    _event,
+    event,
     payload: {
       format: 'mp4' | 'mov'
       fps: number
@@ -477,6 +498,11 @@ ipcMain.handle(
         height: payload.height,
         segments: payload.segments,
         audioClips: payload.audioClips,
+        onProgress: (progress: number) => {
+          if (!event.sender.isDestroyed()) {
+             event.sender.send(IPC_CHANNELS.ANIMATIC_EXPORT_PROGRESS, progress);
+          }
+        }
       })
 
       return { success: true, message: 'Exported', data: { filePath } }
@@ -486,40 +512,3 @@ ipcMain.handle(
     }
   },
 )
-
-ipcMain.handle(IPC_CHANNELS.VIDEO_IMPORT, async (_event) => {
-  if (!win) return { success: false, message: 'No window found' };
-  try {
-    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-      title: 'Import Video',
-      properties: ['openFile'],
-      filters: [
-        {
-          name: 'Video',
-          extensions: ['mp4', 'webm', 'mov', 'm4v', 'mkv'],
-        },
-      ],
-    });
-
-    if (canceled || filePaths.length === 0) {
-      return { success: false, message: 'Import canceled' };
-    }
-
-    const buffer = await fs.readFile(filePaths[0]);
-    const base64 = buffer.toString('base64');
-    const fileName = filePaths[0].split('\\').pop()?.split('/').pop() || 'Imported Video';
-    const lower = fileName.toLowerCase();
-    let mimeType = 'video/mp4';
-    if (lower.endsWith('.webm')) mimeType = 'video/webm';
-    else if (lower.endsWith('.mov')) mimeType = 'video/quicktime';
-    else if (lower.endsWith('.m4v')) mimeType = 'video/x-m4v';
-    else if (lower.endsWith('.mkv')) mimeType = 'video/x-matroska';
-
-    const dataUri = `data:${mimeType};base64,${base64}`;
-
-    return { success: true, message: 'Video imported', data: { dataUri, fileName } };
-  } catch (error) {
-    console.error('Video import error:', error);
-    return { success: false, message: (error as Error).message };
-  }
-});

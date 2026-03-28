@@ -21,6 +21,15 @@ export type AnimaticExportSegment = {
   durationSec: number;
 };
 
+// Extract the raw file path from our custom protocol
+function resolveAssetPath(dataUri: string): string | null {
+  if (dataUri.startsWith('asset://')) {
+    return decodeURIComponent(dataUri.slice('asset://'.length));
+  }
+  return null;
+}
+
+// Kept for decoding storyboard panel drawings (which are correctly Base64)
 function decodeDataUriBase(dataUri: string, defaultMime: string): { mime: string; buffer: Buffer } {
   if (!dataUri.startsWith('data:')) throw new Error('Invalid data URI');
   const key = ';base64,';
@@ -46,29 +55,45 @@ function decodeImageDataUri(dataUri: string): { ext: string; buffer: Buffer } {
   return { ext, buffer };
 }
 
-function decodeAudioFileDataUri(dataUri: string): { ext: string; buffer: Buffer } {
-  const { mime, buffer } = decodeDataUriBase(dataUri, 'application/octet-stream');
-  let ext = 'bin';
-  if (mime.includes('mpeg') || mime.includes('mp3')) ext = 'mp3';
-  else if (mime.includes('wav')) ext = 'wav';
-  else if (mime.includes('ogg')) ext = 'ogg';
-  else if (mime.includes('mp4') || mime.includes('m4a') || mime.includes('x-m4a')) ext = 'm4a';
-  else if (mime.includes('aac')) ext = 'aac';
-  else if (mime.includes('flac')) ext = 'flac';
-  else if (mime.includes('webm')) ext = 'webm';
-  return { ext, buffer };
-}
-
-function runFfmpeg(ffmpegPath: string, args: string[], cwd: string): Promise<void> {
+function runFfmpeg(
+  ffmpegPath: string, 
+  args: string[], 
+  cwd: string, 
+  totalDurationSec?: number,
+  onProgress?: (progress: number) => void
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(ffmpegPath, args, { cwd, windowsHide: true });
     let stderr = '';
+    
     child.stderr?.on('data', (c) => {
-      stderr += c.toString();
+      const chunk = c.toString();
+      stderr += chunk;
+      
+      if (onProgress && totalDurationSec && totalDurationSec > 0) {
+        // Parse time=00:00:05.23 from FFmpeg stderr stream
+        const timeMatch = chunk.match(/time=(\d{2}):(\d{2}):(\d{2}\.\d+)/);
+        if (timeMatch) {
+          const hours = parseInt(timeMatch[1], 10);
+          const minutes = parseInt(timeMatch[2], 10);
+          const seconds = parseFloat(timeMatch[3]);
+          const currentSec = (hours * 3600) + (minutes * 60) + seconds;
+          
+          let progress = currentSec / totalDurationSec;
+          if (progress > 0.99) progress = 0.99; 
+          if (progress < 0) progress = 0;
+          
+          onProgress(progress);
+        }
+      }
     });
+
     child.on('error', (err) => reject(err));
     child.on('close', (code) => {
-      if (code === 0) resolve();
+      if (code === 0) {
+        if (onProgress) onProgress(1.0);
+        resolve();
+      }
       else reject(new Error(`ffmpeg exited with code ${code}:\n${stderr.slice(-4000)}`));
     });
   });
@@ -84,22 +109,18 @@ function effectiveClipSourceDurationSec(c: AnimaticExportAudioClipPayload): numb
   return Math.max(1 / AUDIO_SAMPLE_RATE, dur);
 }
 
-/**
- * Builds an H.264 + AAC MP4 or MOV from still frames + per-segment duration, optional timeline audio.
- */
 export async function exportAnimaticVideo(params: {
   ffmpegPath: string;
   outputPath: string;
   format: 'mp4' | 'mov';
-  /** Project / timeline framerate — drives `-framerate` on still inputs so picture cadence matches the app. */
   fps: number;
   width: number;
   height: number;
   segments: AnimaticExportSegment[];
-  /** Timeline clips (muted/solo-filtered in renderer). Empty → silent AAC for length of video. */
   audioClips?: AnimaticExportAudioClipPayload[];
+  onProgress?: (progress: number) => void;
 }): Promise<void> {
-  const { ffmpegPath, outputPath, format, fps, width, height, segments, audioClips = [] } = params;
+  const { ffmpegPath, outputPath, format, fps, width, height, segments, audioClips = [], onProgress } = params;
   if (!segments.length) {
     throw new Error('No timeline segments to export.');
   }
@@ -154,12 +175,18 @@ export async function exportAnimaticVideo(params: {
       audioMapArg = `${n}:a`;
     } else {
       const audioMeta: { trimStart: number; playDur: number; delayMs: number }[] = [];
+      
       for (let k = 0; k < audioClips.length; k++) {
         const c = audioClips[k]!;
-        const dec = decodeAudioFileDataUri(c.dataUri);
-        const fn = `aud_${k}.${dec.ext}`;
-        await writeFile(join(tmp, fn), dec.buffer);
-        args.push('-i', fn);
+        
+        // Fail loudly if we are feeding Base64 to FFmpeg
+        const assetPath = resolveAssetPath(c.dataUri);
+        if (!assetPath) {
+          throw new Error(`Strict Asset Pipeline Violation: Audio clip [${c.id}] is missing a valid asset:// path. Data URI received: ${c.dataUri.substring(0, 30)}...`);
+        }
+        
+        args.push('-i', assetPath);
+
         const trimStart = Math.max(0, c.sourceTrimStartSec);
         const playDur = effectiveClipSourceDurationSec(c);
         const delayMs = Math.round(Math.max(0, c.startTimeSec) * 1000);
@@ -220,7 +247,7 @@ export async function exportAnimaticVideo(params: {
     }
     args.push(outName);
 
-    await runFfmpeg(ffmpegPath, args, tmp);
+    await runFfmpeg(ffmpegPath, args, tmp, totalDur, onProgress);
 
     await copyFile(join(tmp, outName), outputPath);
   } finally {

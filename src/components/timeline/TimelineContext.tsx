@@ -85,6 +85,7 @@ export interface TimelineContextValue {
   loopPlayback: boolean;
   setLoopPlayback: React.Dispatch<React.SetStateAction<boolean>>;
   exportingVideo: boolean;
+  exportProgress: number | null;
   sbDnDHighlightTrackId: string | null;
   setSbDnDHighlightTrackId: React.Dispatch<React.SetStateAction<string | null>>;
   dragRef: React.MutableRefObject<any>;
@@ -159,6 +160,7 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [importTrackIndex, setImportTrackIndex] = useState(0);
   const [loopPlayback, setLoopPlayback] = useState(false);
   const [exportingVideo, setExportingVideo] = useState(false);
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [sbDnDHighlightTrackId, setSbDnDHighlightTrackId] = useState<string | null>(null);
 
   const draggingPlayhead = useRef(false);
@@ -355,43 +357,25 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const dx = (e.clientX - d.startX) / lr.pxPerSec;
       if (d.kind === 'clip-slip') {
         const trim = d.origTrim + dx;
-        if (d.trackKind === 'video') {
-          lr.slipTimelineVideoClipToTrim(d.trackIndex, d.clipId, trim);
-        } else {
-          lr.slipTimelineAudioClipToTrim(d.trackIndex, d.clipId, trim);
-        }
+        if (d.trackKind === 'video') lr.slipTimelineVideoClipToTrim(d.trackIndex, d.clipId, trim);
+        else lr.slipTimelineAudioClipToTrim(d.trackIndex, d.clipId, trim);
         return;
       }
       if (d.kind === 'clip-move') {
         const t = lr.snapTime(Math.max(0, d.origStart + dx));
-        if (d.trackKind === 'video') {
-          lr.moveTimelineVideoClip(d.trackIndex, d.clipId, t);
-        } else {
-          lr.moveTimelineAudioClip(d.trackIndex, d.clipId, t);
-        }
+        if (d.trackKind === 'video') lr.moveTimelineVideoClip(d.trackIndex, d.clipId, t);
+        else lr.moveTimelineAudioClip(d.trackIndex, d.clipId, t);
         return;
       }
       if (d.kind === 'clip-resize') {
         const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
-        if (d.trackKind === 'video') {
-          lr.resizeTimelineVideoClip(d.trackIndex, d.clipId, d.edge, tLine);
-        } else {
-          lr.resizeTimelineAudioClip(d.trackIndex, d.clipId, d.edge, tLine);
-        }
+        if (d.trackKind === 'video') lr.resizeTimelineVideoClip(d.trackIndex, d.clipId, d.edge, tLine);
+        else lr.resizeTimelineAudioClip(d.trackIndex, d.clipId, d.edge, tLine);
         return;
       }
-      if (d.kind === 'cam-kf-move') {
-        lr.moveTimelineCameraKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx)));
-        return;
-      }
-      if (d.kind === 'layer-kf-move') {
-        lr.moveTimelineLayerKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx)));
-        return;
-      }
-      if (d.kind === 'sb-clip-move') {
-        lr.moveStoryboardClip(d.trackId, d.clipId, lr.snapTime(Math.max(0, d.origStart + dx)));
-        return;
-      }
+      if (d.kind === 'cam-kf-move') { lr.moveTimelineCameraKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx))); return; }
+      if (d.kind === 'layer-kf-move') { lr.moveTimelineLayerKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx))); return; }
+      if (d.kind === 'sb-clip-move') { lr.moveStoryboardClip(d.trackId, d.clipId, lr.snapTime(Math.max(0, d.origStart + dx))); return; }
       if (d.kind === 'sb-clip-resize') {
         const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
         lr.resizeStoryboardClip(d.trackId, d.clipId, d.edge, tLine);
@@ -401,9 +385,7 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
     const onUp = (e: PointerEvent) => {
       if (e.target instanceof Element) {
-        try {
-          e.target.releasePointerCapture(e.pointerId);
-        } catch (err) {}
+        try { e.target.releasePointerCapture(e.pointerId); } catch (err) {}
       }
       draggingPlayhead.current = false;
       dragRef.current = null;
@@ -418,7 +400,7 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       window.removeEventListener('pointerup', onUp, { capture: true });
       window.removeEventListener('pointercancel', onUp, { capture: true });
     };
-  }, []); 
+  }, []);
 
   const rulerTicks = useMemo(() => {
     const ticks: { x: number; label: string; major: boolean }[] = [];
@@ -477,9 +459,23 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const handleExportAnimatic = async (format: 'mp4' | 'mov') => {
-    if (!project || !window.ipcRenderer || !hasAnyStoryboardTimelineClips(project)) return;
+    if (!project) { await nativeAlert('No project loaded.'); return; }
+    if (!window.ipcRenderer) { await nativeAlert('Video export is not available in this environment.'); return; }
+    
     setExportingVideo(true);
+    setExportProgress(0); // Start at 0%
+
+    // Setup IPC Listener for Progress
+    const progressListener = (_event: any, progress: number) => {
+      setExportProgress(progress);
+    };
+
     try {
+      window.ipcRenderer.on(IPC_CHANNELS.ANIMATIC_EXPORT_PROGRESS, progressListener);
+
+      const w = project.settings.resolution?.width ?? 1920;
+      const h = project.settings.resolution?.height ?? 1080;
+      const safeName = (project.name || 'ScriptBoard').replace(/[<>:"/\\|?*]+/g, '_').slice(0, 120);
       const prefs = useAppStore.getState().preferences;
       const getBrushConfig = (presetId?: string) => {
         if (!presetId) return defaultBrushes['solid'];
@@ -487,11 +483,20 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       };
       const segments = await buildAnimaticSegmentsForProject(project, flatPanels, getBrushConfig);
       const audioClips = collectAnimaticExportAudioClips(project);
+      
       const res: IpcResponse<{ filePath: string }> = await window.ipcRenderer.invoke(IPC_CHANNELS.ANIMATIC_EXPORT_VIDEO, {
-        format, fps, width: project.settings.resolution?.width ?? 1920, height: project.settings.resolution?.height ?? 1080, segments, audioClips, defaultFileName: `${project.name || 'ScriptBoard'}-animatic.${format}`,
+        format, fps, width: w, height: h, segments, audioClips, defaultFileName: `${safeName}-animatic.${format}`,
       });
+      
       if (res.success && res.data?.filePath) await nativeAlert(`Video saved:\n${res.data.filePath}`);
-    } catch (err) { console.error(err); } finally { setExportingVideo(false); }
+    } catch (err) { 
+      console.error(err); 
+      await nativeAlert('An error occurred during export.');
+    } finally { 
+      window.ipcRenderer.off(IPC_CHANNELS.ANIMATIC_EXPORT_PROGRESS, progressListener);
+      setExportingVideo(false); 
+      setExportProgress(null); 
+    }
   };
 
   const onTimelinePointerDown = useCallback((e: React.PointerEvent, scrollEl: HTMLDivElement) => {
@@ -509,7 +514,7 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     pxPerSec, setPxPerSec, snapping, setSnapping, audioScrubbing, setAudioScrubbing,
     showCameraTrack, setShowCameraTrack, showLayerTrack, setShowLayerTrack, showVideoTrack, setShowVideoTrack,
     menuOpen, setMenuOpen, importTrackIndex, setImportTrackIndex, loopPlayback, setLoopPlayback,
-    exportingVideo, sbDnDHighlightTrackId, setSbDnDHighlightTrackId, dragRef,
+    exportingVideo, exportProgress, sbDnDHighlightTrackId, setSbDnDHighlightTrackId, dragRef,
     fps, animaticMode, overwriteClips, audioTracks, videoTracks, storyboardTracksSorted,
     flatPanels, flatScenes, timelineDuration, timelineWidthPx, playheadPx, playheadTotalHeight,
     activeSequenceName, activeMetaSummary, activeLayerName, rulerTicks,

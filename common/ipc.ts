@@ -12,6 +12,8 @@ export const IPC_CHANNELS = {
   VIDEO_IMPORT: 'video:import', // Import video file as base64 data URI
   /** Panel stills + timeline durations -> MP4/MOV via FFmpeg (main process). */
   ANIMATIC_EXPORT_VIDEO: 'animatic:exportVideo',
+  /** Backend sends progress updates (0.0 to 1.0) during video export. */
+  ANIMATIC_EXPORT_PROGRESS: 'animatic:exportProgress',
   /** Pick a directory for batch exports (storyboard PNGs). */
   EXPORT_SELECT_FOLDER: 'export:selectFolder',
   /** Write one binary file (base64, no data: prefix) under folderPath + relativePath. */
@@ -21,7 +23,7 @@ export const IPC_CHANNELS = {
   WINDOW_CLOSE: 'window:close',
   /** After sync `alert`/`confirm`, refocus window + webContents so the renderer receives keyboard again (Windows/Electron). */
   WINDOW_RESTORE_INPUT: 'window:restoreInput',
-  /** Use `dialog.showMessageBox` in main — avoids renderer `window.confirm` breaking keyboard focus (Windows). */
+  /** Use `dialog.showMessageBox` in main - avoids renderer `window.confirm` breaking keyboard focus (Windows). */
   DIALOG_BOX: 'dialog:box',
 } as const;
 
