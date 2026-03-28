@@ -24,7 +24,6 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// IMPORTANT: Register our custom protocol to bypass CORS and stream local files
 protocol.registerSchemesAsPrivileged([
   { scheme: 'asset', privileges: { bypassCSP: true, supportFetchAPI: true, secure: true, standard: true, stream: true } }
 ]);
@@ -110,10 +109,11 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(() => {
-  // Catch the custom protocol and stream the physical file directly
+  // Native URL translation. 
+  // Maps "asset:///" back to "file:///" for direct OS streaming.
   protocol.handle('asset', (request) => {
-    const filePath = decodeURIComponent(request.url.slice('asset://'.length));
-    return net.fetch(pathToFileURL(filePath).toString());
+    const fileUrl = request.url.replace('asset://', 'file://');
+    return net.fetch(fileUrl);
   });
 
   createWindow()
@@ -392,9 +392,6 @@ ipcMain.handle(IPC_CHANNELS.DIALOG_BOX, async (event, payload: DialogBoxPayload)
   return { ok: r.response === 0 }
 })
 
-// === HIGH PERFORMANCE ASSET PIPELINE ===
-// We no longer read massive files into Base64 strings. We just hand the absolute path
-// directly to the frontend wrapped in our custom "asset://" protocol!
 
 ipcMain.handle(IPC_CHANNELS.AUDIO_IMPORT, async (_event) => {
   if (!win) return { success: false, message: 'No window found' };
@@ -413,7 +410,11 @@ ipcMain.handle(IPC_CHANNELS.AUDIO_IMPORT, async (_event) => {
 
     const filePath = filePaths[0];
     const fileName = filePath.split('\\').pop()?.split('/').pop() || 'Imported Audio';
-    const dataUri = `asset://${encodeURIComponent(filePath)}`;
+    
+    // Native URL routing.
+    // Converts physical path to file:/// then transforms to asset:///
+    const fileUrl = pathToFileURL(filePath).href;
+    const dataUri = fileUrl.replace('file://', 'asset://');
 
     return { success: true, message: 'Audio imported', data: { dataUri, fileName } };
   } catch (error) {
@@ -442,7 +443,10 @@ ipcMain.handle(IPC_CHANNELS.VIDEO_IMPORT, async (_event) => {
 
     const filePath = filePaths[0];
     const fileName = filePath.split('\\').pop()?.split('/').pop() || 'Imported Video';
-    const dataUri = `asset://${encodeURIComponent(filePath)}`;
+    
+    // Native URL routing
+    const fileUrl = pathToFileURL(filePath).href;
+    const dataUri = fileUrl.replace('file://', 'asset://');
 
     return { success: true, message: 'Video imported', data: { dataUri, fileName } };
   } catch (error) {

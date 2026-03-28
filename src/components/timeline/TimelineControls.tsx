@@ -3,7 +3,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useTimelineContext, formatTimecode, SKIP_SECONDS, MIN_ZOOM, MAX_ZOOM, DEFAULT_PX_PER_SEC } from './TimelineContext';
 import { PlaybackEngine } from '../../engine/PlaybackEngine';
 import {
-  Play, Pause, Import, ZoomIn, MoreHorizontal, SquareStack, Film,
+  Play, Pause, Import, ZoomIn, ZoomOut, MoreHorizontal, SquareStack, Film,
   Clapperboard, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Repeat,
   FileVideo, Loader2, Magnet, AudioWaveform, Camera, Layers2, Video
 } from 'lucide-react';
@@ -16,10 +16,10 @@ export const TimelineTopBar: React.FC = () => {
   const {
     isPlaying, currentTime, timelineDuration, fps, loopPlayback, setLoopPlayback,
     importTrackIndex, setImportTrackIndex, audioTracks, showVideoTrack,
-    exportingVideo, seekTo, snapTime, handlePlayPause, handleImportAudio, handleImportVideo, handleExportAnimatic
+    exportingVideo, seekTo, snapTime, handlePlayPause, handleImportAudio, handleImportVideo, handleExportAnimatic,
+    isImportingMedia
   } = useTimelineContext();
 
-  // BIND THE TIMECODE SPAN TO THE ENGINE
   useEffect(() => {
     PlaybackEngine.getInstance().timecodeEl = document.getElementById('sb-timecode-display');
   }, []);
@@ -37,7 +37,6 @@ export const TimelineTopBar: React.FC = () => {
       </div>
 
       <div className="flex flex-col leading-tight">
-        {/* ADDED DOM ID 'sb-timecode-display' HERE */}
         <span id="sb-timecode-display" className="font-mono text-lg font-semibold tracking-tight text-sky-300">{formatTimecode(currentTime, fps)}</span>
         <span className="text-[10px] uppercase tracking-wide text-neutral-500">Current timecode</span>
       </div>
@@ -56,10 +55,19 @@ export const TimelineTopBar: React.FC = () => {
             {audioTracks.map((_, i) => ( <option key={i} value={i}>A{i + 1}</option> ))}
           </select>
         </label>
-        <button type="button" onClick={handleImportAudio} className="flex items-center gap-1.5 rounded bg-[#333] px-3 py-1 text-sm transition-colors hover:bg-[#444]"><Import size={14} /> Import audio</button>
+        
+        <button type="button" disabled={isImportingMedia} onClick={handleImportAudio} className="flex items-center gap-1.5 rounded bg-[#333] px-3 py-1 text-sm transition-colors hover:bg-[#444] disabled:opacity-50">
+          {isImportingMedia ? <Loader2 size={14} className="animate-spin" /> : <Import size={14} />} 
+          {isImportingMedia ? 'Importing...' : 'Import audio'}
+        </button>
+        
         {showVideoTrack && (
-          <button type="button" onClick={handleImportVideo} className="flex items-center gap-1.5 rounded bg-[#333] px-3 py-1 text-sm transition-colors hover:bg-[#444]" title="Import onto video track V1"><Video size={14} /> Import video</button>
+          <button type="button" disabled={isImportingMedia} onClick={handleImportVideo} className="flex items-center gap-1.5 rounded bg-[#333] px-3 py-1 text-sm transition-colors hover:bg-[#444] disabled:opacity-50" title="Import onto video track V1">
+            {isImportingMedia ? <Loader2 size={14} className="animate-spin" /> : <Video size={14} />}
+            {isImportingMedia ? 'Importing...' : 'Import video'}
+          </button>
         )}
+        
         <div className="hidden h-6 w-px bg-neutral-600 sm:block" />
         <span className="hidden text-[10px] text-neutral-500 sm:inline">Export animatic</span>
         <button type="button" disabled={exportingVideo || !project || !hasAnyStoryboardTimelineClips(project)} onClick={() => void handleExportAnimatic('mp4')} className="flex items-center gap-1.5 rounded bg-[#333] px-2 py-1 text-xs transition-colors hover:bg-[#444] disabled:opacity-40" title="Export timeline as MP4 (panels at project framerate + timeline audio).">{exportingVideo ? <Loader2 size={14} className="animate-spin" /> : <FileVideo size={14} />} MP4</button>
@@ -104,22 +112,27 @@ export const TimelineBottomBar: React.FC = () => {
                 <input type="checkbox" checked={showVideoTrack} onChange={(e) => setShowVideoTrack(e.target.checked)} />
                 Show video track (V1)
               </label>
-              <div className="border-t border-neutral-700 px-3 py-2 text-[10px] leading-relaxed text-neutral-400">
-                <span className="font-semibold text-neutral-300">Removing clips</span>
-                <p className="mt-1">
-                  Use trash button to remove the timeline instance - does not remove from outliner.
-                </p>
-              </div>
             </div>
           </>
         )}
       </div>
 
       <div className="ml-auto flex items-center gap-2">
-        <button type="button" onClick={() => setPxPerSec(DEFAULT_PX_PER_SEC)} className="rounded p-1.5 text-neutral-500 hover:bg-neutral-800" title="Reset zoom"><ZoomIn size={16} /></button>
+        <button type="button" onClick={() => setPxPerSec(p => Math.max(MIN_ZOOM, p / 1.5))} className="rounded p-1.5 text-neutral-500 hover:bg-neutral-800" title="Zoom out"><ZoomOut size={16} /></button>
         <Film size={14} className="text-neutral-600" />
-        <input type="range" min={MIN_ZOOM} max={MAX_ZOOM} value={pxPerSec} onChange={(e) => setPxPerSec(Number(e.target.value))} className="h-1 w-28 accent-sky-600" />
-        <span className="w-8 text-[10px] text-neutral-500">{pxPerSec}px/s</span>
+        
+        <input 
+          type="range" 
+          min={Math.log2(MIN_ZOOM)} 
+          max={Math.log2(MAX_ZOOM)} 
+          step="0.1"
+          value={Math.log2(pxPerSec)} 
+          onChange={(e) => setPxPerSec(Math.pow(2, Number(e.target.value)))} 
+          className="h-1 w-28 accent-sky-600 cursor-pointer" 
+        />
+        
+        <button type="button" onClick={() => setPxPerSec(p => Math.min(MAX_ZOOM, p * 1.5))} className="rounded p-1.5 text-neutral-500 hover:bg-neutral-800" title="Zoom in"><ZoomIn size={16} /></button>
+        <span className="w-12 text-right text-[10px] text-neutral-500">{Math.round(pxPerSec)}px/s</span>
       </div>
     </div>
   );
