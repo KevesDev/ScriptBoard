@@ -25,6 +25,7 @@ import { cutTimelineRangeFromClips } from '../lib/audioClipOverlap';
 import { cutTimelineRangeFromVideoClips } from '../lib/videoClipOverlap';
 import { cutStoryboardRangeFromClips } from '../lib/storyboardClipOverlap';
 import { computeRipplePanelStartTimes } from '../lib/timelineLayout';
+import { computeDeltas, applyDelta } from '../lib/deltaHistory'; // <-- OUR NEW ENGINE
 
 const TRANSITION_CYCLE: PanelTransitionType[] = ['none', 'dissolve', 'edgeWipe', 'clockWipe', 'slide'];
 
@@ -59,7 +60,6 @@ export const generateEmptyProject = (): Project => ({
   ]
 });
 
-/** First page in tree order (matches ScriptEditor document tabs). */
 function firstScriptPageIdFromRoot(root: ScriptFolder): string | null {
   const walk = (folder: ScriptFolder): string | null => {
     for (const c of folder.children) {
@@ -81,11 +81,12 @@ interface ProjectState {
   activeScriptPageId: string | null;
   activePanelId: string | null;
   activeLayerId: string | null;
-  /** Last timeline playhead (sec); drives canvas keyframe preview. */
   timelinePlayheadSec: number;
 
-  undoStack: Project[];
-  redoStack: Project[];
+  // NEW: High Performance Delta Stacks
+  undoStack: { fwd: any, inv: any }[];
+  redoStack: { fwd: any, inv: any }[];
+  lastCommitBase: Project | null; // Tracks the "before" state of the current action
   
   // Actions
   setProject: (project: Project) => void;
@@ -133,7 +134,6 @@ interface ProjectState {
   setAnimaticEditingMode: (enabled: boolean) => void;
   setTimelineOverwriteClips: (enabled: boolean) => void;
 
-  // New Track Management
   addTimelineAudioTrack: () => void;
   removeTimelineAudioTrack: (trackIndex: number) => void;
 
@@ -209,6 +209,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
   
   undoStack: [],
   redoStack: [],
+  lastCommitBase: null,
 
   setProject: (project) => {
     const normalized = normalizeProject(project);
@@ -220,6 +221,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       timelinePlayheadSec: 0,
       undoStack: [],
       redoStack: [],
+      lastCommitBase: null,
     });
   },
 
@@ -247,24 +249,78 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 
   commitHistory: () => set((state) => {
     if (!state.project) return state;
-    const newStack = [...state.undoStack, state.project].slice(-50);
-    return { undoStack: newStack, redoStack: [] };
+    const base = state.lastCommitBase;
+    
+    // Calculate exact bytes changed since the last action
+    if (base && base !== state.project) {
+        const deltas = computeDeltas(base, state.project);
+        if (deltas) {
+            const newUndo = [...state.undoStack, deltas].slice(-50); // Keep last 50 actions
+            return { 
+                undoStack: newUndo, 
+                redoStack: [], 
+                lastCommitBase: state.project 
+            };
+        }
+    }
+    return { lastCommitBase: state.project, redoStack: [] };
   }),
 
   undo: () => set((state) => {
-    if (state.undoStack.length === 0 || !state.project) return state;
-    const prevProject = state.undoStack[state.undoStack.length - 1];
-    const newUndoStack = state.undoStack.slice(0, -1);
-    const newRedoStack = [...state.redoStack, state.project];
-    return { project: prevProject, undoStack: newUndoStack, redoStack: newRedoStack };
+    if (!state.project) return state;
+
+    let activeDelta = null;
+    if (state.lastCommitBase && state.lastCommitBase !== state.project) {
+        activeDelta = computeDeltas(state.lastCommitBase, state.project);
+    }
+
+    if (activeDelta) {
+        // We have uncommitted strokes. Undo reverts them first safely.
+        const revertedProject = state.lastCommitBase;
+        const newRedoStack = [...state.redoStack, activeDelta];
+        return {
+            project: revertedProject,
+            redoStack: newRedoStack,
+            lastCommitBase: revertedProject
+        };
+    } else {
+        // Standard Undo
+        if (state.undoStack.length === 0) return state;
+        const newUndoStack = [...state.undoStack];
+        const lastDelta = newUndoStack.pop()!;
+        
+        const prevProject = applyDelta(state.lastCommitBase, lastDelta.inv);
+        const newRedoStack = [...state.redoStack, lastDelta];
+        
+        return {
+            project: prevProject,
+            undoStack: newUndoStack,
+            redoStack: newRedoStack,
+            lastCommitBase: prevProject
+        };
+    }
   }),
 
   redo: () => set((state) => {
-    if (state.redoStack.length === 0 || !state.project) return state;
-    const nextProject = state.redoStack[state.redoStack.length - 1];
-    const newRedoStack = state.redoStack.slice(0, -1);
-    const newUndoStack = [...state.undoStack, state.project];
-    return { project: nextProject, undoStack: newUndoStack, redoStack: newRedoStack };
+    if (!state.project || state.redoStack.length === 0) return state;
+
+    // If user has uncommitted changes, clear redo stack to prevent branching paradox
+    if (state.lastCommitBase && state.lastCommitBase !== state.project) {
+        return { redoStack: [] };
+    }
+
+    const newRedoStack = [...state.redoStack];
+    const nextDelta = newRedoStack.pop()!;
+    
+    const nextProject = applyDelta(state.project, nextDelta.fwd);
+    const newUndoStack = [...state.undoStack, nextDelta];
+    
+    return {
+        project: nextProject,
+        undoStack: newUndoStack,
+        redoStack: newRedoStack,
+        lastCommitBase: nextProject
+    };
   }),
 
   addScene: (scene) => 

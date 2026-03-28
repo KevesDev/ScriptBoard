@@ -50,14 +50,13 @@ const createDragImage = () => {
 
 const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: string, dragImg: HTMLImageElement | null }) => {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: panel.id });
-  const { removePanel } = useProjectStore();
+  const { removePanel, commitHistory, activePanelId, setActivePanelId } = useProjectStore();
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
   };
   
-  const { activePanelId, setActivePanelId } = useProjectStore();
   const isActive = activePanelId === panel.id;
 
   return (
@@ -110,7 +109,10 @@ const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: str
             onClick={(e) => {
               e.stopPropagation();
               void (async () => {
-                if (await nativeConfirm('Delete panel?')) removePanel(sceneId, panel.id);
+                if (await nativeConfirm('Delete panel?')) {
+                  commitHistory();
+                  removePanel(sceneId, panel.id);
+                }
               })();
             }}
             className="rounded bg-red-600 p-1 text-white shadow hover:bg-red-700"
@@ -143,7 +145,7 @@ function blockStyle(b: ScriptSceneBlock): string {
 }
 
 const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; activePanelId: string | null; dragImg: HTMLImageElement | null }) => {
-  const { addPanel, removeScene, reorderPanels } = useProjectStore();
+  const { addPanel, removeScene, reorderPanels, commitHistory } = useProjectStore();
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: scene.id });
 
   const style = {
@@ -152,6 +154,7 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
   };
 
   const handleAddPanel = () => {
+    commitHistory();
     const newPanel: Panel = {
       id: crypto.randomUUID(),
       order: scene.panels.length + 1,
@@ -175,6 +178,7 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
     const { active, over } = event;
     
     if (active.id !== over?.id) {
+      commitHistory();
       const oldIndex = scene.panels.findIndex(p => p.id === active.id);
       const newIndex = scene.panels.findIndex(p => p.id === over?.id);
       
@@ -216,7 +220,10 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
           <button 
             onClick={() => {
               void (async () => {
-                if (await nativeConfirm(`Delete ${scene.name}?`)) removeScene(scene.id);
+                if (await nativeConfirm(`Delete ${scene.name}?`)) {
+                  commitHistory();
+                  removeScene(scene.id);
+                }
               })();
             }} 
             className="p-1 hover:bg-red-900 rounded text-neutral-400 hover:text-red-400" 
@@ -245,7 +252,7 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
 };
 
 export const Outliner = () => {
-  const { project, addScene, reorderScenes, activePanelId, setActiveScriptPageId } = useProjectStore();
+  const { project, addScene, reorderScenes, activePanelId, setActiveScriptPageId, commitHistory } = useProjectStore();
   const dragImgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
@@ -276,6 +283,7 @@ export const Outliner = () => {
 
   const handleAddScene = () => {
     if (!project) return;
+    commitHistory();
     const newScene: Scene = {
       id: crypto.randomUUID(),
       name: `Scene ${project.scenes.length + 1}`,
@@ -289,6 +297,7 @@ export const Outliner = () => {
     const { active, over } = event;
     
     if (active.id !== over?.id && project) {
+      commitHistory();
       const oldIndex = project.scenes.findIndex(s => s.id === active.id);
       const newIndex = project.scenes.findIndex(s => s.id === over?.id);
       
