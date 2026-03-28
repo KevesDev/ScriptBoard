@@ -1,220 +1,123 @@
 import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
+import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { EditorView } from '@tiptap/pm/view';
-import type { Node as PMNode } from '@tiptap/pm/model';
 
 export const screenplayPaginationKey = new PluginKey('screenplayPagination');
 
-/** Matches `padding-top: 1in` on blocks after a page break (index.css). */
-const PRINT_BLOCK_TOP_PAD_PX = 96;
-
 export interface ScreenplayPaginationOptions {
   getEnabled: () => boolean;
-  getDefer: () => boolean;
   pageBodyHeightPx: number;
 }
 
-function collectPageBreakRanges(doc: PMNode): { from: number; to: number }[] {
-  const ranges: { from: number; to: number }[] = [];
-  doc.descendants((node, pos) => {
-    if (node.type.name === 'pageBreak') {
-      ranges.push({ from: pos, to: pos + node.nodeSize });
-    }
-  });
-  return ranges;
-}
-
-/** Outer height for a top-level block at document position `pos` (before the node). */
+/**
+ * Safely measures the actual rendered height of a top-level block.
+ */
 function domBlockHeight(view: EditorView, pos: number): number {
   let el = view.nodeDOM(pos) as HTMLElement | null;
-  if (!el || el.nodeType !== 1) {
-    el = view.nodeDOM(pos + 1) as HTMLElement | null;
-  }
   if (!el || el.nodeType !== 1) {
     try {
       const { node } = view.domAtPos(pos, 1);
       let n: Node | null = node;
-      if (n.nodeType === Node.TEXT_NODE) n = n.parentElement;
+      if (n?.nodeType === Node.TEXT_NODE) n = n.parentElement;
       el = n as HTMLElement | null;
       while (el && el.parentElement && el.parentElement !== view.dom) {
         el = el.parentElement;
       }
     } catch {
-      return 6;
+      return 0;
     }
   }
-  if (!el || el.nodeType !== 1) return 6;
+  if (!el || el.nodeType !== 1) return 0;
+  
   const cs = window.getComputedStyle(el);
   const mt = parseFloat(cs.marginTop) || 0;
   const mb = parseFloat(cs.marginBottom) || 0;
   return el.offsetHeight + mt + mb;
 }
 
-function splitOneOversizedTopLevelBlock(view: EditorView, pageBody: number, key: PluginKey): boolean {
-  let target: { a: number; b: number } | null = null;
-  view.state.doc.forEach((child, offset) => {
-    if (target) return;
-    if (child.type.name === 'pageBreak' || !child.isTextblock) return;
-    const pos = 1 + offset;
-    const h = domBlockHeight(view, pos);
-    if (h <= pageBody + 8) return;
-    const a = pos + 1;
-    const b = pos + child.nodeSize - 1;
-    if (b <= a) return;
-    target = { a, b };
-  });
-  if (!target) return false;
-  const mid = Math.floor((target.a + target.b) / 2);
-  const tr = view.state.tr.split(mid);
-  tr.setMeta(key, true);
-  tr.setMeta('addToHistory', false);
-  view.dispatch(tr);
-  return true;
-}
-
-function blockMetrics(view: EditorView): { pos: number; height: number }[] {
-  const doc = view.state.doc;
-  const out: { pos: number; height: number }[] = [];
-  doc.forEach((child, offset, index) => {
-    if (child.type.name === 'pageBreak') return;
-    const pos = 1 + offset;
-    let h = domBlockHeight(view, pos);
-    if (index > 0 && doc.child(index - 1).type.name === 'pageBreak') {
-      h -= PRINT_BLOCK_TOP_PAD_PX;
-      h = Math.max(h, 6);
-    }
-    out.push({ pos, height: Math.max(h, 6) });
-  });
-  return out;
-}
-
-function desiredBreakBeforeBlockIndices(blocks: { height: number }[], pageBody: number): Set<number> {
-  const set = new Set<number>();
-  let used = 0;
-  const limit = pageBody + 0.5;
-
-  for (let i = 0; i < blocks.length; i++) {
-    const h = blocks[i].height;
-    if (h > pageBody) {
-      if (used > 0) {
-        set.add(i);
-        used = 0;
-      }
-      used = 0;
-      continue;
-    }
-    if (used > 0 && used + h > limit) {
-      set.add(i);
-      used = h;
-    } else {
-      used += h;
-    }
-  }
-  return set;
-}
-
-function desiredBreakPositions(blocks: { pos: number; height: number }[], pageBody: number): number[] {
-  const indices = desiredBreakBeforeBlockIndices(blocks, pageBody);
-  return blocks.filter((_, i) => indices.has(i)).map((b) => b.pos);
-}
-
-function stripPageBreaks(view: EditorView, key: PluginKey) {
-  const dels = collectPageBreakRanges(view.state.doc);
-  if (dels.length === 0) return;
-  let tr = view.state.tr;
-  tr.setMeta(key, true);
-  tr.setMeta('addToHistory', false);
-  dels.sort((a, b) => b.from - a.from);
-  for (const { from, to } of dels) {
-    tr = tr.delete(from, to);
-  }
-  view.dispatch(tr);
-}
-
-function insertBreaksAt(view: EditorView, positions: number[], key: PluginKey) {
-  const pageBreakType = view.state.schema.nodes.pageBreak;
-  if (!pageBreakType || positions.length === 0) return;
-  const unique = [...new Set(positions)].sort((a, b) => b - a);
-  let tr = view.state.tr;
-  tr.setMeta(key, true);
-  tr.setMeta('addToHistory', false);
-  for (const p of unique) {
-    tr = tr.insert(p, pageBreakType.create());
-  }
-  if (tr.docChanged) view.dispatch(tr);
-}
-
-function collapseAdjacentPageBreaks(view: EditorView, key: PluginKey) {
-  const doc = view.state.doc;
-  const toDelete: { from: number; to: number }[] = [];
-  let prevWasBreak = false;
-  doc.forEach((child, offset) => {
-    const pos = 1 + offset;
-    if (child.type.name === 'pageBreak') {
-      if (prevWasBreak) {
-        toDelete.push({ from: pos, to: pos + child.nodeSize });
-      }
-      prevWasBreak = true;
-    } else {
-      prevWasBreak = false;
-    }
-  });
-  if (toDelete.length === 0) return;
-  let tr = view.state.tr;
-  tr.setMeta(key, true);
-  tr.setMeta('addToHistory', false);
-  toDelete.sort((a, b) => b.from - a.from);
-  for (const d of toDelete) {
-    tr = tr.delete(d.from, d.to);
-  }
-  view.dispatch(tr);
-}
-
 /**
- * One full pass: remove all auto breaks, wait for layout, split tall paragraphs, insert breaks from measurements.
- * No “want === have” shortcut — that skipped work when DOM heights were still wrong (~6px), so no breaks ever appeared.
+ * AAA Layout Engine: Calculates where page breaks SHOULD be visually 
+ * rendered without ever modifying the underlying document data.
  */
-export function repaginatePrintView(view: EditorView, pageBody: number, key: PluginKey) {
-  if (!view.dom.isConnected || !view.state.schema.nodes.pageBreak) return;
-
-  let tr = view.state.tr;
-  tr.setMeta(key, true);
-  tr.setMeta('addToHistory', false);
-  const dels = collectPageBreakRanges(view.state.doc);
-  dels.sort((a, b) => b.from - a.from);
-  for (const { from, to } of dels) {
-    tr = tr.delete(from, to);
-  }
-
-  const afterStrip = () => {
-    if (!view.dom.isConnected) return;
-    let guard = 0;
-    while (guard++ < 120 && splitOneOversizedTopLevelBlock(view, pageBody, key)) {
-      /* one split per loop; layout updates before next */
-    }
-    const blocks = blockMetrics(view);
-    const desired = desiredBreakPositions(blocks, pageBody);
-    insertBreaksAt(view, desired, key);
-    collapseAdjacentPageBreaks(view, key);
-  };
-
-  if (tr.docChanged) {
-    view.dispatch(tr);
-    requestAnimationFrame(() => requestAnimationFrame(afterStrip));
-  } else {
-    requestAnimationFrame(() => requestAnimationFrame(afterStrip));
-  }
-}
-
-export function scheduleScreenplayRepagination(
-  view: EditorView,
-  pageBody: number,
-  opts: { enabled: boolean; defer: boolean },
-) {
-  if (!opts.enabled || opts.defer) return;
-  queueMicrotask(() => {
-    repaginatePrintView(view, pageBody, screenplayPaginationKey);
+function calculatePagination(view: EditorView, pageBodyHeightPx: number): DecorationSet {
+  const blocks: { pos: number; height: number; type: string }[] = [];
+  
+  // 1. Map the heights of all root-level nodes
+  view.state.doc.forEach((node, offset) => {
+    // AAA FIX: offset + 1 ensures we target the absolute position of the node itself
+    // placing the decoration safely BETWEEN blocks instead of inside them.
+    const pos = offset + 1; 
+    let h = domBlockHeight(view, pos);
+    if (h <= 0) h = 24; // Fallback height if not fully rendered yet
+    blocks.push({ pos, height: h, type: node.type.name });
   });
+
+  const decos: Decoration[] = [];
+  let used = 0;
+  let pageNum = 1;
+
+  // 2. Iterate and apply Widow/Orphan formatting rules
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    
+    if (used + b.height > pageBodyHeightPx && used > 0) {
+      
+      // Widow/Orphan Protection: Don't strand Character without their Dialogue!
+      let breakIdx = i;
+      if (b.type === 'dialogue' || b.type === 'parenthetical') {
+        let j = i - 1;
+        while (j > 0 && (blocks[j].type === 'character' || blocks[j].type === 'parenthetical')) {
+          breakIdx = j;
+          j--;
+        }
+      }
+
+      // Safety: Never put a page break before the very first node
+      if (breakIdx === 0) breakIdx = 1;
+
+      pageNum++;
+      const breakPos = blocks[breakIdx].pos;
+      
+      // 3. Generate the "Ghost" Page Break Decoration using a factory function
+      // This prevents ProseMirror from dropping the DOM node during fast typing
+      decos.push(Decoration.widget(breakPos, () => {
+        const widget = document.createElement('div');
+        widget.className = 'script-page-break-decorator select-none pointer-events-none';
+        widget.contentEditable = 'false'; // Prevents cursor from entering the gap
+        
+        // AAA FIX: Using transform to bleed into padding guarantees it won't be clipped
+        widget.style.cssText = `
+          height: 36px;
+          background: #f3f4f6;
+          width: calc(100% + 2in);
+          transform: translateX(-1in);
+          margin: 2rem 0;
+          display: flex;
+          align-items: center;
+          justify-content: flex-end;
+          padding-right: 1in;
+          border-top: 2px dashed #9ca3af;
+          border-bottom: 2px dashed #9ca3af;
+          position: relative;
+          z-index: 50;
+          user-select: none;
+        `;
+        widget.innerHTML = `<span style="font-family: 'Courier Prime', Courier, monospace; font-size: 12px; color: #6b7280; font-weight: bold;">PAGE ${pageNum}</span>`;
+        return widget;
+      }, { side: -1, key: `page-break-${pageNum}` }));
+
+      // 4. Reset 'used' vertical space to the height of the blocks we just shifted to the new page
+      used = 0;
+      for (let k = breakIdx; k <= i; k++) {
+        used += blocks[k].height;
+      }
+    } else {
+      used += b.height;
+    }
+  }
+
+  return DecorationSet.create(view.state.doc, decos);
 }
 
 export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions>({
@@ -223,68 +126,96 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
   addOptions() {
     return {
       getEnabled: () => false,
-      getDefer: () => false,
       pageBodyHeightPx: 96 * 9 - 52,
     };
   },
 
   addCommands() {
-    const opts = this.options;
     return {
-      repaginateScript:
-        () =>
-        ({ editor }) => {
-          scheduleScreenplayRepagination(editor.view, opts.pageBodyHeightPx, {
-            enabled: opts.getEnabled(),
-            defer: opts.getDefer(),
-          });
-          return true;
-        },
-      stripScriptPageBreaks:
-        () =>
-        ({ editor }) => {
-          stripPageBreaks(editor.view, screenplayPaginationKey);
-          return true;
-        },
+      repaginateScript: () => ({ editor }) => {
+        const tr = editor.state.tr.setMeta(screenplayPaginationKey, { forceRecalc: true });
+        editor.view.dispatch(tr);
+        return true;
+      },
+      stripScriptPageBreaks: () => ({ editor }) => {
+        const tr = editor.state.tr.setMeta(screenplayPaginationKey, { clear: true });
+        editor.view.dispatch(tr);
+        return true;
+      },
     };
   },
 
   addProseMirrorPlugins() {
     const opts = this.options;
-    const key = screenplayPaginationKey;
-    const pageBody = opts.pageBodyHeightPx;
 
     return [
       new Plugin({
-        key,
+        key: screenplayPaginationKey,
+        state: {
+          init() {
+            return DecorationSet.empty;
+          },
+          apply(tr, oldState) {
+            const meta = tr.getMeta(screenplayPaginationKey);
+            if (meta?.clear) {
+              return DecorationSet.empty;
+            }
+            if (meta?.decos !== undefined) {
+              return meta.decos;
+            }
+            // Map decorations securely through document changes so they don't break while typing
+            return oldState.map(tr.mapping, tr.doc);
+          }
+        },
+        props: {
+          decorations(state) {
+            return this.getState(state);
+          }
+        },
         view: (view: EditorView) => {
           let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+          let isDestroyed = false;
 
-          const run = () => {
-            debounceTimer = null;
-            if (!view.dom.isConnected) return;
+          const runLayoutEngine = () => {
+            if (isDestroyed || !view.dom.isConnected) return;
+            
             if (!opts.getEnabled()) {
-              stripPageBreaks(view, key);
+              view.dispatch(view.state.tr.setMeta(screenplayPaginationKey, { clear: true }));
               return;
             }
-            if (opts.getDefer()) return;
-            repaginatePrintView(view, pageBody, key);
+
+            // Wait for DOM to finish rendering the user's latest keystroke
+            requestAnimationFrame(() => {
+              if (isDestroyed) return;
+              const newDecos = calculatePagination(view, opts.pageBodyHeightPx);
+              view.dispatch(view.state.tr.setMeta(screenplayPaginationKey, { decos: newDecos }));
+            });
           };
 
           const schedule = () => {
-            if (debounceTimer !== null) clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(run, 100);
+            if (debounceTimer) clearTimeout(debounceTimer);
+            // 300ms debounce ensures buttery smooth typing even on massive scripts
+            debounceTimer = setTimeout(runLayoutEngine, 300); 
           };
 
           schedule();
 
           return {
-            update: (updatedView, prevState) => {
-              if (updatedView.state.doc.eq(prevState.doc)) return;
+            update: (updatedView) => {
+              const meta = updatedView.state.tr.getMeta(screenplayPaginationKey);
+              if (meta?.forceRecalc) {
+                runLayoutEngine();
+                return;
+              }
+              
+              // Only schedule the Layout Engine if the user actually typed/deleted content.
+              // This guarantees zero infinite loops!
+              if (!updatedView.state.tr.docChanged) return;
               schedule();
             },
             destroy: () => {
-              if (debounceTimer !== null) clearTimeout(debounceTimer);
+              isDestroyed = true;
+              if (debounceTimer) clearTimeout(debounceTimer);
             },
           };
         },

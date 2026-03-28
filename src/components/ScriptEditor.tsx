@@ -32,10 +32,10 @@ import {
   Dialogue,
   Parenthetical,
   Transition,
-  PageBreak,
   ScreenplayShortcuts,
   ScreenplayDefaultEnter,
   CommentMark,
+  CustomListItem,
 } from '../tiptap/ScreenplayNodes';
 import { ScreenplayPagination } from '../tiptap/ScreenplayPagination';
 import { ScreenplayTabCycle } from '../tiptap/ScreenplayTabCycle';
@@ -51,7 +51,7 @@ import { base64ToUtf8Text, utf8TextToBase64 } from '../lib/scriptContentBase64';
 /** US Letter height in CSS px (96px per inch). */
 const US_LETTER_PAGE_CSS_PX = 96 * 11;
 
-/** Fallback when no `pageBreak` nodes yet: band centers by US Letter height. */
+/** Fallback when no decorations yet: band centers by US Letter height. */
 function printPageMarkerCenters(totalHeightPx: number): { num: number; top: number }[] {
   const h = Math.max(0, totalHeightPx);
   const n = Math.max(1, Math.ceil(h / US_LETTER_PAGE_CSS_PX));
@@ -64,10 +64,10 @@ function printPageMarkerCenters(totalHeightPx: number): { num: number; top: numb
   return markers;
 }
 
-/** Gutter numbers aligned to real page-break rails (px from top of paper). */
+/** Gutter numbers aligned to the new Decorator page-break rails. */
 function gutterMarkersFromPaper(paperEl: HTMLElement): { num: number; top: number }[] {
   const sh = paperEl.scrollHeight;
-  const breaks = [...paperEl.querySelectorAll('[data-page-break]')] as HTMLElement[];
+  const breaks = [...paperEl.querySelectorAll('.script-page-break-decorator')] as HTMLElement[];
   if (breaks.length === 0) {
     return printPageMarkerCenters(sh);
   }
@@ -86,7 +86,6 @@ function gutterMarkersFromPaper(paperEl: HTMLElement): { num: number; top: numbe
   return out;
 }
 
-/** Scene titles in document order from stored TipTap JSON (for link picker on other pages). */
 function getSceneTitlesFromStoredContent(contentBase64: string): string[] {
   const titles: string[] = [];
   const walk = (node: any) => {
@@ -127,7 +126,6 @@ function findSceneHeadingDocumentPos(editor: { state: { doc: any } }, sceneIndex
   return foundPos;
 }
 
-/** Update comment mark attrs by stable id without moving focus into the editor. */
 function applyCommentAttrsById(editor: any, commentId: string, attrs: { text?: string; author?: string; timestamp?: number }) {
   const markType = editor.state.schema.marks.comment;
   if (!markType) return;
@@ -291,7 +289,6 @@ export const ScriptEditor: React.FC = () => {
   const paginationEnabledRef = useRef(scriptLayout === 'print');
   paginationEnabledRef.current = scriptLayout === 'print';
   const paperRef = useRef<HTMLDivElement>(null);
-  /** Measured paper `scrollHeight`; drives gutter column height in print layout. */
   const [paperScrollHeight, setPaperScrollHeight] = useState(US_LETTER_PAGE_CSS_PX);
   const [printGutterMarkers, setPrintGutterMarkers] = useState<{ num: number; top: number }[]>([]);
 
@@ -356,7 +353,6 @@ export const ScriptEditor: React.FC = () => {
   };
   const allPages = getAllPages();
 
-  // Helper to find the active page content without binding to the reactive project dependency
   const loadContentForPage = (pageId: string): any => {
     const currentProject = useProjectStore.getState().project;
     if (!currentProject || !pageId) return '';
@@ -365,7 +361,6 @@ export const ScriptEditor: React.FC = () => {
     const findPage = (folder: ScriptFolder) => {
       for (const child of folder.children) {
         if (child.type === 'page' && child.id === pageId) {
-          // Changed default new line to Action instead of SceneHeading
           content = child.contentBase64 || '<p class="action"></p>';
           return true;
         } else if (child.type === 'folder') {
@@ -394,18 +389,14 @@ export const ScriptEditor: React.FC = () => {
   const [outlineItems, setOutlineItems] = React.useState<{id: string, title: string, pos: number}[]>([]);
 
   const isUpdatingRef = useRef(false);
-  /** True while applying `setContent` for a page switch; blocks onUpdate from persisting the wrong doc to the new page id. */
   const loadingPageContentRef = useRef(false);
-  /** Page id whose document in the editor was last loaded from the store; null until first load completes. */
   const lastLoadedScriptPageIdRef = useRef<string | null>(null);
-  /** When this differs from `project.id`, we must apply store content even if JSON matches (new project / load). */
   const lastSyncedProjectIdRef = useRef<string | null>(null);
   const editorRef = useRef<any>(null);
   const activeScriptPageIdRef = useRef<string | null>(activeScriptPageId);
   activeScriptPageIdRef.current = activeScriptPageId;
   const navigateInternalScriptHrefRef = useRef<(href: string) => void>(() => {});
 
-  /** Stable identity so TipTap does not call `setOptions` every render (which can lock `editable: false` after `window.confirm`). */
   const scriptEditorProps = useMemo(
     () => ({
       attributes: {
@@ -437,7 +428,10 @@ export const ScriptEditor: React.FC = () => {
   const scriptEditorExtensions = useMemo(
     () => [
       Action,
-      StarterKit,
+      StarterKit.configure({
+        listItem: false, // Disable default ListItem to allow custom script blocks
+      }),
+      CustomListItem,    // Inject our upgraded block+ ListItem
       Underline,
       TextStyle,
       Color,
@@ -465,10 +459,8 @@ export const ScriptEditor: React.FC = () => {
       Dialogue,
       Parenthetical,
       Transition,
-      PageBreak,
       ScreenplayPagination.configure({
         getEnabled: () => paginationEnabledRef.current,
-        getDefer: () => loadingPageContentRef.current,
         pageBodyHeightPx: 96 * 9 - 52,
       }),
       ScreenplayTabCycle,
@@ -492,7 +484,6 @@ export const ScriptEditor: React.FC = () => {
   const editor = useEditor(
     {
     extensions: scriptEditorExtensions,
-    /** Shell only; page JSON/HTML is applied in the sync effect so `content` is not a new object every Zustand update. */
     content: '<p class="action"></p>',
     editable: true,
     editorProps: scriptEditorProps,
@@ -563,11 +554,8 @@ export const ScriptEditor: React.FC = () => {
         /* selection/doc can be transiently invalid during page swaps */
       }
     },
-    onBlur: () => {
-      // Intentionally empty to prevent auto-syncing scenes
-    },
+    onBlur: () => {},
   },
-    // New project / load: fresh TipTap instance. Same project: keep instance so Zustand script edits do not recreate the editor.
     [project?.id ?? '__no_project__'],
   );
 
@@ -625,7 +613,6 @@ export const ScriptEditor: React.FC = () => {
     return () => window.removeEventListener(AFTER_NATIVE_DIALOG_EVENT, fixEditable);
   }, []);
 
-  // Update editor content when active page or project identity changes
   useEffect(() => {
     if (!editor) return;
 
@@ -665,8 +652,6 @@ export const ScriptEditor: React.FC = () => {
       loadingPageContentRef.current = false;
       lastSyncedProjectIdRef.current = projectId;
       if (editor && !editor.isDestroyed) {
-        // TipTap's useEditor can call setOptions with `editable: editor.isEditable`; after `window.confirm`,
-        // that can briefly be false and persist in options — ProseMirror then stays contenteditable=false.
         editor.setEditable(true);
       }
     }
@@ -708,7 +693,7 @@ export const ScriptEditor: React.FC = () => {
         });
       });
     }
-  }, [activeScriptPageId, editor, project?.id]); // `project.id` only — avoids reload loops on content edits
+  }, [activeScriptPageId, editor, project?.id]); 
 
   useEffect(() => {
     if (scriptLayout !== 'print') {
@@ -760,7 +745,6 @@ export const ScriptEditor: React.FC = () => {
   if (!project) return <div className="p-4 text-neutral-500 bg-[#151515] h-full">No project loaded.</div>;
 
   const handleNewPage = () => {
-     // Find the "Documents" folder or just root to add a page
      const docsFolder = project.rootScriptFolder.children.find(c => c.type === 'folder' && c.name === 'Documents');
      const targetId = docsFolder ? docsFolder.id : project.rootScriptFolder.id;
      addPageToFolder(targetId, `Script ${allPages.length + 1}`);
@@ -922,15 +906,12 @@ export const ScriptEditor: React.FC = () => {
             const el = e.target as HTMLElement;
             const inEditor = el.closest('.ProseMirror, [contenteditable="true"]');
             if (inEditor) return;
-            // Stop flexlayout from treating this as a tab drag; do NOT preventDefault — that blocks
-            // the browser from focusing the contenteditable on the next click.
             e.stopPropagation();
             setTimeout(() => {
               editor?.commands.focus();
             }, 0);
           }}
           onClick={(e) => {
-            // Failsafe: if they clicked inside the white document, ensure it truly receives focus natively.
             if ((e.target as HTMLElement).closest('.ProseMirror')) {
               setTimeout(() => {
                 if (editor && !editor.isFocused) {
@@ -940,8 +921,6 @@ export const ScriptEditor: React.FC = () => {
             }
           }}
           onKeyDownCapture={(e) => {
-            // Never intercept deletion keys here — TipTap / ProseMirror must handle them. A persisted
-            // shortcut accidentally set to "backspace" would otherwise preventDefault and block deletes.
             if (e.key === 'Backspace' || e.key === 'Delete') return;
 
             const prefs = preferences.shortcuts;
@@ -984,7 +963,7 @@ export const ScriptEditor: React.FC = () => {
           )}
         </div>
 
-        {/* Right sidebar: resizable width; scroll tab row so Comments stays reachable */}
+        {/* Right sidebar */}
         <div className="flex shrink-0 z-10 font-sans shadow-xl" style={{ width: rightSidebarWidth }}>
           <div
             role="separator"
@@ -1249,7 +1228,7 @@ const LineTypeButton = ({ editor, type, icon, title, label }: { editor: any, typ
   return (
     <button
       onMouseDown={(e) => {
-        e.preventDefault(); // Prevent losing focus from the editor
+        e.preventDefault(); 
         if (editor) {
           editor.commands.focus();
           editor.commands.setNode(type);

@@ -1,5 +1,6 @@
 import { Node, Mark, mergeAttributes, Extension } from '@tiptap/core';
 import { Plugin } from '@tiptap/pm/state';
+import ListItem from '@tiptap/extension-list-item';
 
 export interface ScreenplayNodeOptions {
   HTMLAttributes: Record<string, any>;
@@ -18,6 +19,11 @@ export const ScreenplayShortcuts = Extension.create({
       }
     };
   }
+});
+
+// Allow any block (Action, Dialogue, etc) to be wrapped in a List Item
+export const CustomListItem = ListItem.extend({
+  content: 'block+',
 });
 
 // Scene Heading
@@ -242,34 +248,6 @@ export const Parenthetical = Node.create<ScreenplayNodeOptions>({
   }
 });
 
-/** Automatic pagination inserts this between blocks in print layout (US Letter body height). */
-export const PageBreak = Node.create<ScreenplayNodeOptions>({
-  name: 'pageBreak',
-  group: 'block',
-  atom: true,
-  selectable: false,
-  draggable: false,
-
-  addOptions() {
-    return {
-      HTMLAttributes: {
-        class: 'script-page-break',
-        'data-type': 'pageBreak',
-        'data-page-break': '',
-        contenteditable: 'false',
-      },
-    };
-  },
-
-  parseHTML() {
-    return [{ tag: 'div[data-page-break]' }, { tag: 'div[data-type="pageBreak"]' }];
-  },
-
-  renderHTML({ HTMLAttributes }) {
-    return ['div', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)];
-  },
-});
-
 // Transition
 export const Transition = Node.create<ScreenplayNodeOptions>({
   name: 'transition',
@@ -310,7 +288,7 @@ export const Transition = Node.create<ScreenplayNodeOptions>({
   }
 });
 
-/** Enter in plain StarterKit blocks → next line is Action (default screenplay line). */
+/** Enter in plain StarterKit blocks > next line is Action (default screenplay line). */
 export const ScreenplayDefaultEnter = Extension.create({
   name: 'screenplayDefaultEnter',
   priority: 950,
