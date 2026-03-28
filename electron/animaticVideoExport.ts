@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import { copyFile, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import type { AnimaticExportAudioClipPayload } from '../common/models';
 import {
   assertImageBufferMatchesExt,
@@ -22,20 +22,34 @@ export type AnimaticExportSegment = {
   durationSec: number;
 };
 
-// Extract the raw file path natively
+// Safely parse both native file URLs and legacy corrupted test URLs for FFmpeg
 function resolveAssetPath(dataUri: string): string | null {
   if (!dataUri.startsWith('asset://')) return null;
   
   try {
-    let cleanUri = dataUri;
+    let fileUrl = dataUri;
     
-    // Dev fallback: Clean up any mangled URIs from our previous tests saved in the project file
-    if (cleanUri.startsWith('asset://local/')) {
-      cleanUri = cleanUri.replace('asset://local/', 'asset:///');
+    // 1.
+    if (fileUrl.startsWith('asset://localhost/')) {
+      fileUrl = fileUrl.replace('asset://localhost/', 'file:///');
+    } 
+    // 2. Rescue Test 1: URL Encoded
+    else if (fileUrl.startsWith('asset://local/')) {
+      const raw = decodeURIComponent(fileUrl.slice('asset://local/'.length));
+      fileUrl = pathToFileURL(raw).href;
+    } 
+    // 3. Rescue Test 2: Chromium Mangled Host
+    else if (fileUrl.startsWith('asset://') && !fileUrl.startsWith('asset:///')) {
+      const withoutScheme = fileUrl.slice('asset://'.length);
+      const match = withoutScheme.match(/^([a-zA-Z])\/(.*)/);
+      if (match) {
+        fileUrl = `file:///${match[1].toUpperCase()}:/${match[2]}`;
+      } else {
+        fileUrl = fileUrl.replace('asset://', 'file://');
+      }
     }
-    
-    // Native OS-aware conversion from URL back to physical path for FFmpeg
-    return fileURLToPath(cleanUri.replace('asset://', 'file://'));
+
+    return fileURLToPath(fileUrl);
   } catch (err) {
     console.error('Failed to resolve physical path from URI:', dataUri, err);
     return null;

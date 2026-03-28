@@ -110,16 +110,37 @@ app.on('activate', () => {
 })
 
 app.whenReady().then(() => {
-  // Delegate everything to Node's native 'net.fetch'
+  // Native Router with backwards-compatibility rescue
   protocol.handle('asset', (request) => {
-    let fileUrl = request.url.replace('asset://', 'file://');
-    
-    // Safety check to sanitize any broken links saved during our previous tests
-    if (fileUrl.startsWith('file://local/')) {
-      fileUrl = fileUrl.replace('file://local/', 'file:///');
+    try {
+      let fileUrl = request.url;
+      
+      // asset://localhost/D:/...
+      if (fileUrl.startsWith('asset://localhost/')) {
+        fileUrl = fileUrl.replace('asset://localhost/', 'file:///');
+      } 
+      // Rescue Test 1: URL Encoded Dummy Host (asset://local/D%3A...)
+      else if (fileUrl.startsWith('asset://local/')) {
+        const raw = decodeURIComponent(fileUrl.slice('asset://local/'.length));
+        fileUrl = pathToFileURL(raw).href;
+      } 
+      // Rescue Test 2: Chromium Mangled Host (asset://d/Animations...)
+      else if (fileUrl.startsWith('asset://') && !fileUrl.startsWith('asset:///')) {
+        const withoutScheme = fileUrl.slice('asset://'.length);
+        const match = withoutScheme.match(/^([a-zA-Z])\/(.*)/);
+        if (match) {
+          // Restore the drive letter and colon: file:///D:/Animations...
+          fileUrl = `file:///${match[1].toUpperCase()}:/${match[2]}`;
+        } else {
+          fileUrl = fileUrl.replace('asset://', 'file://');
+        }
+      }
+
+      return net.fetch(fileUrl);
+    } catch (err) {
+      console.error('Asset protocol error for URL:', request.url, err);
+      return new Response('Not Found', { status: 404 });
     }
-    
-    return net.fetch(fileUrl);
   });
 
   createWindow()
@@ -416,9 +437,9 @@ ipcMain.handle(IPC_CHANNELS.AUDIO_IMPORT, async (_event) => {
     const filePath = filePaths[0];
     const fileName = filePath.split('\\').pop()?.split('/').pop() || 'Imported Audio';
     
-    // Use Node's native pathToFileURL to generate standard syntax
-    const fileUrl = pathToFileURL(filePath).href; // file:///D:/path...
-    const dataUri = fileUrl.replace('file://', 'asset://');
+    // Need a dummy host until I figure out something else - Creates `file:///D:/...` and maps to `asset://localhost/D:/...`
+    const fileUrl = pathToFileURL(filePath).href; 
+    const dataUri = fileUrl.replace('file:///', 'asset://localhost/');
 
     return { success: true, message: 'Audio imported', data: { dataUri, fileName } };
   } catch (error) {
@@ -448,9 +469,9 @@ ipcMain.handle(IPC_CHANNELS.VIDEO_IMPORT, async (_event) => {
     const filePath = filePaths[0];
     const fileName = filePath.split('\\').pop()?.split('/').pop() || 'Imported Video';
     
-    // Use Node's native pathToFileURL to generate standard syntax
+    
     const fileUrl = pathToFileURL(filePath).href; 
-    const dataUri = fileUrl.replace('file://', 'asset://');
+    const dataUri = fileUrl.replace('file:///', 'asset://localhost/');
 
     return { success: true, message: 'Video imported', data: { dataUri, fileName } };
   } catch (error) {
