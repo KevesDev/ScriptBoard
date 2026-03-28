@@ -25,9 +25,10 @@ import { cutTimelineRangeFromClips } from '../lib/audioClipOverlap';
 import { cutTimelineRangeFromVideoClips } from '../lib/videoClipOverlap';
 import { cutStoryboardRangeFromClips } from '../lib/storyboardClipOverlap';
 import { computeRipplePanelStartTimes } from '../lib/timelineLayout';
-import { computeDeltas, applyDelta } from '../lib/deltaHistory'; // <-- OUR NEW ENGINE
+import { computeDeltas, applyDelta } from '../lib/deltaHistory';
 
 const TRANSITION_CYCLE: PanelTransitionType[] = ['none', 'dissolve', 'edgeWipe', 'clockWipe', 'slide'];
+const MIN_CLIP_DUR = 0.01; // Allow frame-accurate 0.01s clip durations (similar to the industry big boys)
 
 export { normalizeProject, createDefaultTimeline } from '@common/projectMigrate';
 
@@ -83,7 +84,7 @@ interface ProjectState {
   activeLayerId: string | null;
   timelinePlayheadSec: number;
 
-  // NEW: High Performance Delta Stacks
+  // Sexy High Performance Delta Stacks ~
   undoStack: { fwd: any, inv: any }[];
   redoStack: { fwd: any, inv: any }[];
   lastCommitBase: Project | null; // Tracks the "before" state of the current action
@@ -1240,16 +1241,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const s = clip.startTimeSec;
       const e = s + clip.durationSec;
       const t = timelineTimeSec;
-      const minDur = 0.08;
       if (edge === 'right') {
-        const newEnd = Math.max(s + minDur, t);
+        const newEnd = Math.max(s + MIN_CLIP_DUR, t);
         const newDur = newEnd - s;
         tracks[trackIndex] = {
           ...tr,
           clips: tr.clips.map((c) => (c.id === clipId ? { ...c, durationSec: newDur } : c)),
         };
       } else {
-        const newStart = Math.min(t, e - minDur);
+        const newStart = Math.min(t, e - MIN_CLIP_DUR);
         const delta = newStart - s;
         const newDur = e - newStart;
         const newTrim = clip.sourceTrimStartSec + delta;
@@ -1359,11 +1359,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         clip.sourceDurationSec != null && clip.sourceDurationSec > 0
           ? clip.sourceDurationSec
           : clip.durationSec + clip.sourceTrimStartSec;
-      const minDur = 0.08;
-      let newTrim = Math.max(0, Math.min(sourceTrimStartSec, sourceLen - minDur));
+      let newTrim = Math.max(0, Math.min(sourceTrimStartSec, sourceLen - MIN_CLIP_DUR));
       let newDur = clip.durationSec;
       if (newTrim + newDur > sourceLen) {
-        newDur = Math.max(minDur, sourceLen - newTrim);
+        newDur = Math.max(MIN_CLIP_DUR, sourceLen - newTrim);
       }
       tracks[trackIndex] = {
         ...tr,
@@ -1526,16 +1525,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const s = clip.startTimeSec;
       const e = s + clip.durationSec;
       const t = timelineTimeSec;
-      const minDur = 0.08;
       if (edge === 'right') {
-        const newEnd = Math.max(s + minDur, t);
+        const newEnd = Math.max(s + MIN_CLIP_DUR, t);
         const newDur = newEnd - s;
         tracks[trackIndex] = {
           ...tr,
           clips: tr.clips.map((c) => (c.id === clipId ? { ...c, durationSec: newDur } : c)),
         };
       } else {
-        const newStart = Math.min(t, e - minDur);
+        const newStart = Math.min(t, e - MIN_CLIP_DUR);
         const delta = newStart - s;
         const newDur = e - newStart;
         const newTrim = clip.sourceTrimStartSec + delta;
@@ -1570,11 +1568,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
         clip.sourceDurationSec != null && clip.sourceDurationSec > 0
           ? clip.sourceDurationSec
           : clip.durationSec + clip.sourceTrimStartSec;
-      const minDur = 0.08;
-      let newTrim = Math.max(0, Math.min(sourceTrimStartSec, sourceLen - minDur));
+      let newTrim = Math.max(0, Math.min(sourceTrimStartSec, sourceLen - MIN_CLIP_DUR));
       let newDur = clip.durationSec;
       if (newTrim + newDur > sourceLen) {
-        newDur = Math.max(minDur, sourceLen - newTrim);
+        newDur = Math.max(MIN_CLIP_DUR, sourceLen - newTrim);
       }
       tracks[trackIndex] = {
         ...tr,
@@ -1873,13 +1870,12 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
       const s = clip.startTimeSec;
       const e = s + clip.durationSec;
       const t = timelineTimeSec;
-      const minDur = 0.08;
       let nextClip: TimelineStoryboardClip;
       if (edge === 'right') {
-        const newEnd = Math.max(s + minDur, t);
+        const newEnd = Math.max(s + MIN_CLIP_DUR, t);
         nextClip = { ...clip, durationSec: newEnd - s };
       } else {
-        const newStart = Math.min(Math.max(0, t), e - minDur);
+        const newStart = Math.min(Math.max(0, t), e - MIN_CLIP_DUR);
         nextClip = { ...clip, startTimeSec: newStart, durationSec: e - newStart };
       }
       let others = tr.clips.filter((c) => c.id !== clipId);

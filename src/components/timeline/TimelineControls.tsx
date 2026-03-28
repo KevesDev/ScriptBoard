@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useTimelineContext, formatTimecode, SKIP_SECONDS, MIN_ZOOM, MAX_ZOOM, DEFAULT_PX_PER_SEC } from './TimelineContext';
+import { PlaybackEngine } from '../../engine/PlaybackEngine';
 import {
   Play, Pause, Import, ZoomIn, MoreHorizontal, SquareStack, Film,
   Clapperboard, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Repeat,
@@ -18,6 +19,11 @@ export const TimelineTopBar: React.FC = () => {
     exportingVideo, seekTo, snapTime, handlePlayPause, handleImportAudio, handleImportVideo, handleExportAnimatic
   } = useTimelineContext();
 
+  // BIND THE TIMECODE SPAN TO THE ENGINE
+  useEffect(() => {
+    PlaybackEngine.getInstance().timecodeEl = document.getElementById('sb-timecode-display');
+  }, []);
+
   return (
     <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-black bg-[#252525] px-3 py-2">
       <div className="flex items-center gap-0.5 rounded-md border border-neutral-600 bg-[#1e1e1e] p-0.5">
@@ -31,7 +37,8 @@ export const TimelineTopBar: React.FC = () => {
       </div>
 
       <div className="flex flex-col leading-tight">
-        <span className="font-mono text-lg font-semibold tracking-tight text-sky-300">{formatTimecode(currentTime, fps)}</span>
+        {/* ADDED DOM ID 'sb-timecode-display' HERE */}
+        <span id="sb-timecode-display" className="font-mono text-lg font-semibold tracking-tight text-sky-300">{formatTimecode(currentTime, fps)}</span>
         <span className="text-[10px] uppercase tracking-wide text-neutral-500">Current timecode</span>
       </div>
 

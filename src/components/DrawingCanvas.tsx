@@ -7,6 +7,7 @@ import { StoryboardEngine } from '../engine/StoryboardEngine';
 import { sampleCameraAtTime, sampleLayerAtTime } from '../lib/timelineKeyframes';
 import { getStoryboardCompositionAtTime, getTopStoryboardPanelIdAtTime } from '../lib/timelineStoryboardComposition';
 import { collectOnionNeighborStacks, computeOnionOpacities } from '../lib/onionSkinNeighbors';
+import { buildStoryboardTimeline, type FlatPanelLayout } from '../lib/timelineLayout';
 import { STORYBOARD_CLIPBOARD_STORAGE_KEY, parseStoryboardClipboard, serializeStoryboardClipboard, offsetStrokesBy, selectionBoundsFromStrokes } from '../lib/storyboardClipboard';
 import { computeVectorBucketFillPaths, applyRasterBucketFromCompositeCanvas } from '../lib/vectorPaintBucket';
 import { panelLayersHaveDrawableContent, countInkPixelsInStoryboardThumbnailDataUrl } from '../lib/storyboardThumbnailSafety';
@@ -64,19 +65,20 @@ export const DrawingCanvas = () => {
     return sampleLayerAtTime(timelinePlayheadSec, activePanelId, activeLayerId, list);
   }, [project?.timeline, activePanelId, activeLayerId, timelinePlayheadSec]);
 
-  const { underlayStacks, panelLayersForCanvas } = useMemo(() => {
-    if (!project || !activePanelId) return { underlayStacks: [], panelLayersForCanvas: [] };
+  const { underlayStacks, panelLayersForCanvas, activePanelExists } = useMemo(() => {
+    if (!project || !activePanelId) return { underlayStacks: [], panelLayersForCanvas: [], activePanelExists: false };
     let sceneLayers: Layer[] = [];
+    let exists = false;
     for (const scene of project.scenes) {
       const panel = scene.panels.find((p) => p.id === activePanelId);
-      if (panel) { sceneLayers = panel.layers; break; }
+      if (panel) { sceneLayers = panel.layers; exists = true; break; }
     }
     const topAtPlayhead = getTopStoryboardPanelIdAtTime(project, timelinePlayheadSec);
-    if (topAtPlayhead !== activePanelId) return { underlayStacks: [], panelLayersForCanvas: sceneLayers };
+    if (topAtPlayhead !== activePanelId) return { underlayStacks: [], panelLayersForCanvas: sceneLayers, activePanelExists: exists };
     const comp = getStoryboardCompositionAtTime(project, timelinePlayheadSec);
     const topIdx = comp.findIndex(s => s.panelId === activePanelId);
-    if (topIdx >= 0) return { underlayStacks: comp.slice(0, topIdx).map((s) => s.layers), panelLayersForCanvas: sceneLayers };
-    return { underlayStacks: [], panelLayersForCanvas: sceneLayers };
+    if (topIdx >= 0) return { underlayStacks: comp.slice(0, topIdx).map((s) => s.layers), panelLayersForCanvas: sceneLayers, activePanelExists: exists };
+    return { underlayStacks: [], panelLayersForCanvas: sceneLayers, activePanelExists: exists };
   }, [project, activePanelId, timelinePlayheadSec]);
 
   const onionSkinPrefs = preferences.onionSkin ?? { panelsBefore: 1, panelsAfter: 1, previousColor: '#ff6b6b', nextColor: '#4dabf7', nearestOpacityPercent: 35, fadePerStep: 0.65, startEnabled: false };
@@ -106,11 +108,11 @@ export const DrawingCanvas = () => {
   }, []);
 
   useEffect(() => {
-    if (activePanelId && !activeLayerId && panelLayersForCanvas.length === 0) {
+    if (activePanelExists && activePanelId && !activeLayerId && panelLayersForCanvas.length === 0) {
       Logger.warn('DrawingCanvas', 'Active panel contains 0 layers. Auto-generating default Vector layer.');
       useProjectStore.getState().addLayer(activePanelId, 'vector');
     }
-  }, [activePanelId, activeLayerId, panelLayersForCanvas.length]);
+  }, [activePanelExists, activePanelId, activeLayerId, panelLayersForCanvas.length]);
 
   useEffect(() => {
     if (activePanelId) {
@@ -137,9 +139,23 @@ export const DrawingCanvas = () => {
     }, 450);
   }, [activePanelId]);
 
-  const latestRef = useRef({ activePanelId, activeLayerId, panelLayersForCanvas, color, selectedStrokeIndices, commitHistory, updateLayerStrokes, getBrushConfig, updateThumbnail, bucketMode });
+  const flatPanelsRef = useRef<FlatPanelLayout[]>([]);
   useEffect(() => {
-    latestRef.current = { activePanelId, activeLayerId, panelLayersForCanvas, color, selectedStrokeIndices, commitHistory, updateLayerStrokes, getBrushConfig, updateThumbnail, bucketMode };
+     if (project) flatPanelsRef.current = buildStoryboardTimeline(project).flatPanels;
+  }, [project]);
+
+  const latestRef = useRef({ 
+    activePanelId, activeLayerId, panelLayersForCanvas, color, selectedStrokeIndices, 
+    commitHistory, updateLayerStrokes, getBrushConfig, updateThumbnail, bucketMode,
+    tool, brushPreset, brushSize, zoom, onionSkinPrefs
+  });
+
+  useEffect(() => {
+    latestRef.current = { 
+      activePanelId, activeLayerId, panelLayersForCanvas, color, selectedStrokeIndices, 
+      commitHistory, updateLayerStrokes, getBrushConfig, updateThumbnail, bucketMode,
+      tool, brushPreset, brushSize, zoom, onionSkinPrefs
+    };
   });
 
   const mountEngine = useCallback((node: HTMLDivElement | null) => {
@@ -298,6 +314,57 @@ export const DrawingCanvas = () => {
     });
   }, [tool, brushPreset, color, brushSize, activeLayerId, activePanelId, panelLayersForCanvas, onionBeforeStacks, onionAfterStacks, onionBeforeOpacities, onionAfterOpacities, underlayStacks, onionSkinEnabled, onionSkinPrefs, selectedStrokeIndices, cameraTransform, layerTransform, zoom]);
 
+  useEffect(() => {
+    const handlePlaybackFrame = (e: Event) => {
+       const t = (e as CustomEvent).detail.time;
+       const proj = useProjectStore.getState().project;
+       if (!proj || !engineRef.current) return;
+
+       const { activeLayerId, tool, brushPreset, color, brushSize, onionSkinPrefs, selectedStrokeIndices, zoom } = latestRef.current;
+
+       let newActiveId = getTopStoryboardPanelIdAtTime(proj, t);
+       if (!newActiveId) {
+           // AAA FIX: If the timeline tracks are being used, gaps should render as empty/black!
+           const hasClips = proj.timeline?.storyboardTracks?.some(tr => tr.clips.length > 0);
+           if (!hasClips) {
+               newActiveId = flatPanelsRef.current.find(x => t >= x.startTime && t < x.endTime)?.id ?? null;
+           }
+       }
+
+       let sceneLayers: Layer[] = [];
+       let underlays: Layer[][] = [];
+       
+       if (newActiveId) {
+          for (const scene of proj.scenes) {
+            const panel = scene.panels.find((p) => p.id === newActiveId);
+            if (panel) { sceneLayers = panel.layers; break; }
+          }
+          const comp = getStoryboardCompositionAtTime(proj, t);
+          const topIdx = comp.findIndex(s => s.panelId === newActiveId);
+          if (topIdx >= 0) {
+              underlays = comp.slice(0, topIdx).map(s => s.layers);
+          }
+       }
+
+       const cam = proj.timeline?.cameraKeyframes?.length ? sampleCameraAtTime(t, proj.timeline.cameraKeyframes) : null;
+       const lTrans = (newActiveId && activeLayerId && proj.timeline?.layerKeyframes?.length) ? sampleLayerAtTime(t, newActiveId, activeLayerId, proj.timeline.layerKeyframes) : null;
+
+       engineRef.current.updateState({
+          tool, brushPreset, color, brushSize, activeLayerId, 
+          activePanelId: newActiveId, 
+          panelLayers: sceneLayers,
+          onionBeforeStacks: [], onionAfterStacks: [], underlayStacks: underlays, 
+          onionSkinEnabled: false, 
+          onionPrefs: onionSkinPrefs,
+          onionBeforeOpacities: [], onionAfterOpacities: [],
+          selectedStrokeIndices, cameraTransform: cam, layerTransform: lTrans, zoom
+       });
+    };
+
+    window.addEventListener('playback-time-update', handlePlaybackFrame);
+    return () => window.removeEventListener('playback-time-update', handlePlaybackFrame);
+  }, []);
+
   const handleColorChange = (c: string) => {
     setColor(c);
     if (selectedStrokeIndices.size > 0 && activePanelId && activeLayerId) {
@@ -327,7 +394,6 @@ export const DrawingCanvas = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // THE FIX: We use the new exported function to check if we are typing in an input
       if (isKeyboardEventTargetTextEntry(e.target)) return;
 
       const key = e.key.toLowerCase();
@@ -339,9 +405,6 @@ export const DrawingCanvas = () => {
       let val = key; if (val === ' ') val = 'space';
       const combo = comboPieces.length > 0 ? `${comboPieces.join('+')}+${val}` : '';
       const sc = preferences.shortcuts;
-
-      // Note: Undo/Redo are now completely handled by GlobalShortcutManager.tsx!
-      // We only intercept stroke-editing commands here.
 
       if (combo === sc.zoomIn) { e.preventDefault(); handleZoomIn(); return; }
       if (combo === sc.zoomOut) { e.preventDefault(); handleZoomOut(); return; }

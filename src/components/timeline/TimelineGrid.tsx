@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { useProjectStore } from '../../store/projectStore';
+import { PlaybackEngine } from '../../engine/PlaybackEngine';
 import { 
   useTimelineContext, RULER_H, SCENE_STRIP_H, VIDEO_ROW_H, KF_TRACK_H, 
   META_H, STORYBOARD_ROW_H, AUDIO_ROW_H 
@@ -54,6 +55,11 @@ export const TimelineGrid: React.FC = () => {
     showLayerTrack, audioTracks, onTimelinePointerDown, dragRef, flatPanels, seekTo
   } = useTimelineContext();
 
+  // BIND PLAYBACK ENGINE TO THE DOM PLAYHEAD (React-Free Playback)
+  useEffect(() => {
+    PlaybackEngine.getInstance().playheadEl = document.getElementById('sb-playhead-line');
+  }, []);
+
   const renderAudioClip = (clip: TimelineAudioClip, trackIndex: number, locked: boolean) => (
     <div key={clip.id} className="absolute top-1 flex overflow-hidden rounded border border-teal-900/80 bg-[#0d1a1f] shadow-sm" style={{ left: clip.startTimeSec * pxPerSec, width: Math.max(8, clip.durationSec * pxPerSec), height: AUDIO_ROW_H - 8 }} data-no-scrub
       onContextMenu={(e) => { e.preventDefault(); if (!locked) void (async () => { if (await nativeConfirm('Remove clip?')) { commitHistory(); removeTimelineAudioClip(trackIndex, clip.id); } })(); }}>
@@ -86,7 +92,10 @@ export const TimelineGrid: React.FC = () => {
     <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto bg-[#1e1e1e]" onPointerDown={(e) => { if (scrollRef.current && (e.target as HTMLElement).closest('[data-timeline-surface]')) onTimelinePointerDown(e, scrollRef.current); }}>
       <div className="relative" style={{ width: timelineWidthPx, minHeight: playheadTotalHeight }}>
         
-        <div id="timeline-playhead" className="pointer-events-none absolute top-0 z-30 w-px bg-red-500 will-change-transform" style={{ left: 0, transform: `translateX(${playheadPx}px)`, height: playheadTotalHeight }}><div className="absolute -top-0 left-1/2 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[7px] border-x-transparent border-t-red-500" /></div>
+        {/* NATIVE PLAYHEAD IDENTIFIER APPLIED HERE */}
+        <div id="sb-playhead-line" className="pointer-events-none absolute top-0 z-30 w-px bg-red-500 will-change-transform" style={{ left: 0, transform: `translateX(${playheadPx}px)`, height: playheadTotalHeight }}>
+          <div className="absolute -top-0 left-1/2 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[7px] border-x-transparent border-t-red-500" />
+        </div>
         
         <div data-timeline-surface className="relative cursor-crosshair border-b border-neutral-800 bg-[#2a2a2a]" style={{ height: RULER_H }}>
           {rulerTicks.map((tk, i) => ( <div key={i} className={`absolute bottom-0 border-l ${tk.major ? 'h-3 border-neutral-500' : 'h-1.5 border-neutral-600'}`} style={{ left: tk.x }} /> ))}

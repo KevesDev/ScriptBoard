@@ -17,7 +17,7 @@ import {
 } from '../../lib/timelineStoryboardComposition';
 import { decodeAudioFromDataUri, downsamplePeaks } from '../../lib/audioClipDecode';
 import { probeVideoDurationFromDataUri } from '../../lib/videoClipMetadata';
-import { useTimelinePlayback } from '../../hooks/useTimelinePlayback';
+import { PlaybackEngine } from '../../engine/PlaybackEngine';
 import { collectAnimaticExportAudioClips } from '../../lib/animaticAudioExport';
 import { buildAnimaticSegmentsForProject } from '../../lib/animaticSegments';
 import { getPanelIdFromDataTransfer } from '../../lib/panelTimelineDnD';
@@ -33,8 +33,9 @@ export const META_H = 48;
 export const STORYBOARD_ROW_H = 72;
 export const AUDIO_ROW_H = 72;
 export const DEFAULT_PX_PER_SEC = 50;
-export const MIN_ZOOM = 12;
-export const MAX_ZOOM = 140;
+
+export const MIN_ZOOM = 1;
+export const MAX_ZOOM = 1000; 
 export const SKIP_SECONDS = 1;
 
 export function panelDefaultClipDurationSec(project: import('@common/models').Project, panelId: string): number {
@@ -133,14 +134,9 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const leftColScrollRef = useRef<HTMLDivElement>(null);
   const scrollSyncLock = useRef(false);
   const flatPanelsRef = useRef<FlatPanelLayout[]>([]);
-  const decodedClipIdsRef = useRef<Set<string>>(new Set());
-  const decodedVideoClipIdsRef = useRef<Set<string>>(new Set());
   const syncAudioRef = useRef<(t: number, playing: boolean) => void>(() => {});
 
-  useEffect(() => {
-    decodedClipIdsRef.current.clear();
-    decodedVideoClipIdsRef.current.clear();
-  }, [project?.id]);
+  const engine = useMemo(() => PlaybackEngine.getInstance(), []);
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -170,6 +166,7 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const overwriteClips = project?.timeline?.overwriteClips ?? false;
   const audioTracks = project?.timeline?.audioTracks ?? [];
   const videoTracks = project?.timeline?.videoTracks ?? [];
+  
   const storyboardTracksSorted = useMemo(() => {
     const tr = project?.timeline?.storyboardTracks ?? [];
     return [...tr].sort((a, b) => a.order - b.order);
@@ -187,25 +184,48 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const playheadTotalHeight = RULER_H + SCENE_STRIP_H + (showVideoTrack ? Math.max(1, videoTracks.length) * VIDEO_ROW_H : 0) + (showCameraTrack ? KF_TRACK_H : 0) + META_H + (Math.max(1, storyboardTracksSorted.length) * STORYBOARD_ROW_H) + (showLayerTrack ? KF_TRACK_H : 0) + (Math.max(1, audioTracks.length) * AUDIO_ROW_H);
 
-  const { syncAudioToTime } = useTimelinePlayback({
-    isPlaying, setIsPlaying, currentTime, setCurrentTime, timelineDuration,
-    tracks: audioTracks, videoTracks, loop: loopPlayback, enabled: !!project?.timeline,
-  });
+  useEffect(() => {
+    engine.onStop = (time) => {
+      setIsPlaying(false);
+      setCurrentTime(time);
+      syncAudioRef.current(time, false);
+      
+      const pSt = useProjectStore.getState().project;
+      if (pSt) {
+        const top = getTopStoryboardPanelIdAtTime(pSt, time);
+        let id = top;
+        if (!top) {
+            const hasClips = pSt.timeline?.storyboardTracks?.some(tr => tr.clips.length > 0);
+            if (!hasClips) {
+                const fp = flatPanelsRef.current.find((x) => time >= x.startTime && time < x.endTime);
+                id = fp?.id ?? null;
+            }
+        }
+        setActivePanelId(id ?? null);
+      }
+    };
+    return () => { engine.onStop = undefined; };
+  }, [engine, setActivePanelId]);
 
-  syncAudioRef.current = syncAudioToTime;
+  useEffect(() => {
+    engine.updateState({
+      duration: timelineDuration,
+      fps,
+      pxPerSec,
+      loop: loopPlayback,
+      audioTracks,
+      videoTracks
+    });
+  }, [engine, timelineDuration, fps, pxPerSec, loopPlayback, audioTracks, videoTracks]);
 
-  const playheadFocusPanelId = useMemo(() => {
-    if (!project) return null;
-    const t = currentTime;
-    const top = getTopStoryboardPanelIdAtTime(project, t);
-    if (top) return top;
-    return flatPanels.find((x) => t >= x.startTime && t < x.endTime)?.id ?? null;
-  }, [project, currentTime, flatPanels]);
+  syncAudioRef.current = useCallback((t: number, playing: boolean) => {
+    engine.syncMedia(t, playing);
+  }, [engine]);
 
   const activeMetaSummary = useMemo(() => {
-    if (!project || !playheadFocusPanelId) return null;
-    return lookupPanelLayoutSummary(project, flatPanels, playheadFocusPanelId);
-  }, [project, flatPanels, playheadFocusPanelId]);
+    if (!project || !activePanelId) return null;
+    return lookupPanelLayoutSummary(project, flatPanels, activePanelId);
+  }, [project, flatPanels, activePanelId]);
 
   useEffect(() => {
     if (!isPlaying || !playheadFocusPanelId) return;
@@ -254,14 +274,24 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return collectTimelineSnapEdges(project, flatPanels, audioEdges);
   }, [project, flatPanels, audioTracks, videoTracks, timelineDuration]);
 
+  //  Absolute Frame Quantization Engine. Should be comparable to most industry-level stuff out there!
   const snapTime = useCallback(
     (t: number) => {
       const clamped = Math.max(0, Math.min(t, timelineDuration));
-      if (!snapping) return clamped;
-      const toEdge = snapTimeToEdges(clamped, snapEdges, 0.4); 
+      
+      // Even if magnetic clip snapping is off, we ALWAYS quantize to the nearest absolute frame boundary!
+      if (!snapping) {
+        return Math.max(0, Math.min(snapToFrame(clamped, fps), timelineDuration));
+      }
+
+      // Sexy dynamic snap tolerance based on zoom level (e.g. 10 pixels on screen = magnetic pull)
+      const visualToleranceSec = 10 / pxPerSec; 
+      const toEdge = snapTimeToEdges(clamped, snapEdges, visualToleranceSec); 
+      
+      // Enforce frame quantization on the final snapped output
       return Math.max(0, Math.min(snapToFrame(toEdge, fps), timelineDuration));
     },
-    [snapping, snapEdges, timelineDuration, fps],
+    [snapping, snapEdges, timelineDuration, fps, pxPerSec],
   );
 
   const seekTo = useCallback(
@@ -269,14 +299,25 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const clamped = Math.max(0, Math.min(t, timelineDuration));
       const snapped = snapTime(clamped);
       setCurrentTime(snapped);
+      engine.seek(snapped);
       syncAudioRef.current(snapped, false);
+      
       const p = useProjectStore.getState().project;
-      const top = p ? getTopStoryboardPanelIdAtTime(p, snapped) : null;
-      const fp = flatPanelsRef.current.find((x) => snapped >= x.startTime && snapped < x.endTime);
-      const id = top ?? fp?.id;
-      if (id) setActivePanelId(id);
+      let id: string | null = null;
+      if (p) {
+        const top = getTopStoryboardPanelIdAtTime(p, snapped);
+        id = top;
+        if (!top) {
+           const hasClips = p.timeline?.storyboardTracks?.some(tr => tr.clips.length > 0);
+           if (!hasClips) {
+              const fp = flatPanelsRef.current.find((x) => snapped >= x.startTime && snapped < x.endTime);
+              id = fp?.id ?? null;
+           }
+        }
+      }
+      setActivePanelId(id ?? null);
     },
-    [timelineDuration, snapTime, setActivePanelId],
+    [timelineDuration, snapTime, setActivePanelId, engine],
   );
 
   const handleStoryboardRowPanelDragOver = useCallback((e: React.DragEvent, tr: TimelineStoryboardTrack) => {
@@ -344,16 +385,29 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         let t = x / lr.pxPerSec;
         t = lr.snapTime(Math.max(0, Math.min(t, lr.timelineDuration)));
         setCurrentTime(t);
+        engine.seek(t);
         lr.syncAudioToTime(t, lr.audioScrubbing);
+        
         const pSt = useProjectStore.getState().project;
-        const top = pSt ? getTopStoryboardPanelIdAtTime(pSt, t) : null;
-        const fp = flatPanelsRef.current.find((x) => t >= x.startTime && t < x.endTime);
-        const id = top ?? fp?.id;
-        if (id) lr.setActivePanelId(id);
+        let id: string | null = null;
+        if (pSt) {
+           const top = getTopStoryboardPanelIdAtTime(pSt, t);
+           id = top;
+           if (!top) {
+               const hasClips = pSt.timeline?.storyboardTracks?.some(tr => tr.clips.length > 0);
+               if (!hasClips) {
+                   const fp = flatPanelsRef.current.find((x) => t >= x.startTime && t < x.endTime);
+                   id = fp?.id ?? null;
+               }
+           }
+        }
+        lr.setActivePanelId(id ?? null);
         return;
       }
 
       const dx = (e.clientX - d.startX) / lr.pxPerSec;
+      
+      // Applying absolute frame snapping to the clip resizing logic (based on what the big boys do)
       if (d.kind === 'clip-slip') {
         const trim = d.origTrim + dx;
         if (d.trackKind === 'video') lr.slipTimelineVideoClipToTrim(d.trackIndex, d.clipId, trim);
@@ -368,16 +422,23 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       if (d.kind === 'clip-resize') {
         const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
-        if (d.trackKind === 'video') lr.resizeTimelineVideoClip(d.trackIndex, d.clipId, d.edge, tLine);
-        else lr.resizeTimelineAudioClip(d.trackIndex, d.clipId, d.edge, tLine);
+        const snappedT = lr.snapTime(Math.max(0, tLine));
+        if (d.trackKind === 'video') lr.resizeTimelineVideoClip(d.trackIndex, d.clipId, d.edge, snappedT);
+        else lr.resizeTimelineAudioClip(d.trackIndex, d.clipId, d.edge, snappedT);
         return;
       }
       if (d.kind === 'cam-kf-move') { lr.moveTimelineCameraKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx))); return; }
       if (d.kind === 'layer-kf-move') { lr.moveTimelineLayerKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx))); return; }
-      if (d.kind === 'sb-clip-move') { lr.moveStoryboardClip(d.trackId, d.clipId, lr.snapTime(Math.max(0, d.origStart + dx))); return; }
+      
+      if (d.kind === 'sb-clip-move') { 
+        lr.moveStoryboardClip(d.trackId, d.clipId, lr.snapTime(Math.max(0, d.origStart + dx))); 
+        return; 
+      }
+      
       if (d.kind === 'sb-clip-resize') {
         const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
-        lr.resizeStoryboardClip(d.trackId, d.clipId, d.edge, tLine);
+        const snappedT = lr.snapTime(Math.max(0, tLine));
+        lr.resizeStoryboardClip(d.trackId, d.clipId, d.edge, snappedT);
         return;
       }
     };
@@ -399,20 +460,55 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       window.removeEventListener('pointerup', onUp, { capture: true });
       window.removeEventListener('pointercancel', onUp, { capture: true });
     };
-  }, []);
+  }, [engine]);
 
+  // Dynamic Scale Ruler (Minutes -> Seconds -> Frames) Just like the big boys!
   const rulerTicks = useMemo(() => {
     const ticks: { x: number; label: string; major: boolean }[] = [];
-    const step = pxPerSec < 20 ? 10 : pxPerSec < 45 ? 5 : pxPerSec < 90 ? 2 : 1;
-    for (let t = 0; t <= timelineDuration + step; t += step) {
-      ticks.push({
-        x: t * pxPerSec,
-        label: t % 60 === 0 || step >= 10 ? `${Math.floor(t / 60)}:${(t % 60).toString().padStart(2, '0')}` : '',
-        major: t % (step * 2) === 0 || step >= 10,
-      });
+    const pxPerFrame = pxPerSec / fps;
+    
+    let majorIntervalFrames = fps; 
+    let minorIntervalFrames = 1;   
+    
+    if (pxPerSec < 10) {
+      majorIntervalFrames = fps * 60; // 1 minute
+      minorIntervalFrames = fps * 10; // 10 seconds
+    } else if (pxPerSec < 30) {
+      majorIntervalFrames = fps * 10; // 10 seconds
+      minorIntervalFrames = fps * 5;  // 5 seconds
+    } else if (pxPerSec < 100) {
+      majorIntervalFrames = fps * 5;  // 5 seconds
+      minorIntervalFrames = fps;      // 1 second
+    } else if (pxPerSec < 200) {
+      majorIntervalFrames = fps;      // 1 second
+      minorIntervalFrames = Math.round(fps / 2); // Half second
+    } else {
+      majorIntervalFrames = fps;      // 1 second
+      minorIntervalFrames = 1;        // 1 frame
+    }
+
+    if (minorIntervalFrames < 1) minorIntervalFrames = 1;
+
+    const totalFrames = Math.ceil(timelineDuration * fps);
+    for (let f = 0; f <= totalFrames + majorIntervalFrames; f += minorIntervalFrames) {
+      const t = f / fps;
+      const x = t * pxPerSec;
+      const isMajor = f % majorIntervalFrames === 0;
+      
+      let label = '';
+      if (isMajor) {
+        const m = Math.floor(t / 60);
+        const s = Math.floor(t % 60);
+        label = `${m}:${s.toString().padStart(2, '0')}`;
+      } else if (pxPerFrame >= 15 && minorIntervalFrames === 1) {
+        const frameNum = f % fps;
+        if (frameNum > 0) label = `${frameNum}`; // Show individual frame numbers when zoomed
+      }
+
+      ticks.push({ x, label, major: isMajor });
     }
     return ticks;
-  }, [timelineDuration, pxPerSec]);
+  }, [timelineDuration, pxPerSec, fps]);
 
   const activeLayerName = useMemo(() => {
     if (!project || !activePanelId || !activeLayerId) return '-';
@@ -424,7 +520,15 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return '-';
   }, [project, activePanelId, activeLayerId]);
 
-  const handlePlayPause = useCallback(() => setIsPlaying((p) => !p), []);
+  const handlePlayPause = useCallback(() => {
+    if (engine.isPlaying) {
+      engine.pause();
+    } else {
+      engine.currentTime = currentTimeRef.current;
+      engine.play();
+      setIsPlaying(true);
+    }
+  }, [engine]);
 
   const handleImportAudio = async () => {
     if (!window.ipcRenderer || !project?.timeline) return;
@@ -462,9 +566,8 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (!window.ipcRenderer) { await nativeAlert('Video export is not available in this environment.'); return; }
     
     setExportingVideo(true);
-    setExportProgress(0); // Start at 0%
+    setExportProgress(0); 
 
-    // Setup IPC Listener for Progress
     const progressListener = (_event: any, progress: number) => {
       setExportProgress(progress);
     };
@@ -508,7 +611,6 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     seekTo(t);
   }, [pxPerSec, snapTime, timelineDuration, seekTo]);
 
-  // Use the Custom Event from GlobalShortcutManager instead of binding Spacebar here directly!
   useEffect(() => {
     const onToggle = () => handlePlayPause();
     window.addEventListener('shortcut:play-pause', onToggle);
