@@ -8,7 +8,7 @@ import { X, Keyboard, PenLine, FileText, ChevronRight, FolderArchive, Layers } f
 type PrefCategory = 'files' | 'storyboard' | 'brushes' | 'script';
 
 const CATEGORY_META: { id: PrefCategory; label: string; description: string; icon: React.ReactNode }[] = [
-  { id: 'files', label: 'Files & backups', description: 'Autosave next to your project', icon: <FolderArchive size={18} /> },
+  { id: 'files', label: 'Files & backups', description: 'Autosave & project copies', icon: <FolderArchive size={18} /> },
   { id: 'storyboard', label: 'Storyboard', description: 'Canvas, zoom, pan', icon: <Keyboard size={18} /> },
   { id: 'brushes', label: 'Brushes', description: 'Engine & custom tips', icon: <PenLine size={18} /> },
   { id: 'script', label: 'Script', description: 'Font & line shortcuts', icon: <FileText size={18} /> },
@@ -20,7 +20,7 @@ export const Preferences = () => {
   const updateProjectSettings = useProjectStore((s) => s.updateProjectSettings);
   const [activeCategory, setActiveCategory] = useState<PrefCategory>('files');
 
-  const files = preferences.files ?? { autoSaveEnabled: true, autoSaveIntervalMinutes: 5 };
+  const files = preferences.files ?? { autoSaveEnabled: true, autoSaveIntervalMinutes: 5, backupEnabled: true, backupIntervalMinutes: 30 };
 
   if (!isPreferencesOpen) return null;
 
@@ -48,6 +48,24 @@ export const Preferences = () => {
     const combo = modifiers.length > 0 ? `${modifiers.join('+')}+${val}` : val;
 
     handleShortcutChange(key, combo);
+  };
+
+  const verifySavePathExists = async (): Promise<boolean> => {
+    if (window.ipcRenderer && project?.id) {
+      try {
+        const q = await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_QUERY_SAVE_PATH, project.id);
+        if (q?.success && q.data && !q.data.hasPath) {
+          await nativeAlert(
+            'Save this project first with File → Save or Save As.\n\n' +
+              'Autosaves and backups require a known project folder to operate.',
+          );
+          return false;
+        }
+      } catch {
+        /* browser / no IPC */
+      }
+    }
+    return true;
   };
 
   return (
@@ -107,12 +125,11 @@ export const Preferences = () => {
                   <div>
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">Project files & backups</h3>
                     <p className="mt-1 text-xs text-neutral-500">
-                      Your main project is a <span className="font-mono text-neutral-400">.sbproj</span> file. Automatic backups use
-                      the same folder and appear as <span className="font-mono text-neutral-400">Name.autosave.sbproj</span> (they
-                      do not replace the main file).
+                      Configure how ScriptBoard automatically preserves your work.
                     </p>
                   </div>
 
+                  {/* AUTOSAVE CARD */}
                   <div className="rounded-xl border border-neutral-800 bg-[#1a1a1a] p-4">
                     <label className="flex cursor-pointer items-start gap-3">
                       <input
@@ -125,55 +142,85 @@ export const Preferences = () => {
                             setPreferences({ files: { ...files, autoSaveEnabled: false } });
                             return;
                           }
-                          if (window.ipcRenderer && project?.id) {
-                            try {
-                              const q = await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_QUERY_SAVE_PATH, project.id);
-                              if (q?.success && q.data && !q.data.hasPath) {
-                                await nativeAlert(
-                                  'Save this project first with File → Save or Save As.\n\n' +
-                                    'Backups are always stored in the same folder as your main .sbproj file, so we need that location before turning this on.',
-                                );
-                                return;
-                              }
-                            } catch {
-                              /* browser / no IPC: allow toggle */
-                            }
+                          if (await verifySavePathExists()) {
+                            setPreferences({ files: { ...files, autoSaveEnabled: true } });
                           }
-                          setPreferences({ files: { ...files, autoSaveEnabled: true } });
                         }}
                       />
                       <span>
-                        <span className="text-sm font-medium text-neutral-200">Automatic timed backups</span>
+                        <span className="text-sm font-medium text-neutral-200">Autosave</span>
                         <span className="mt-1 block text-xs text-neutral-500">
-                          When enabled, ScriptBoard periodically writes the sidecar{' '}
-                          <span className="font-mono">.autosave.sbproj</span> next to your saved project. Save the project
-                          at least once so we know which folder to use.
+                          Automatically overwrites your main <span className="font-mono">.sbproj</span> file so you don't lose progress if you forget to save.
                         </span>
                       </span>
                     </label>
+
+                    <div className="mt-4 pl-7">
+                      <label className="mb-2 block text-xs text-neutral-400">Autosave Interval</label>
+                      <select
+                        className="w-full max-w-xs rounded-lg border border-neutral-700 bg-[#141414] px-3 py-2 text-sm text-neutral-200"
+                        value={files.autoSaveIntervalMinutes ?? 5}
+                        disabled={files.autoSaveEnabled === false}
+                        onChange={(e) =>
+                          setPreferences({
+                            files: { ...files, autoSaveIntervalMinutes: Number(e.target.value) },
+                          })
+                        }
+                      >
+                        {[1, 2, 3, 5, 10, 15, 30, 60].map((m) => (
+                          <option key={m} value={m}>
+                            Every {m} minutes
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
+                  {/* BACKUP CARD */}
                   <div className="rounded-xl border border-neutral-800 bg-[#1a1a1a] p-4">
-                    <label className="mb-2 block text-sm text-neutral-300">Backup interval</label>
-                    <select
-                      className="w-full max-w-xs rounded-lg border border-neutral-700 bg-[#141414] px-3 py-2 text-sm text-neutral-200"
-                      value={files.autoSaveIntervalMinutes ?? 5}
-                      disabled={files.autoSaveEnabled === false}
-                      onChange={(e) =>
-                        setPreferences({
-                          files: { ...files, autoSaveIntervalMinutes: Number(e.target.value) },
-                        })
-                      }
-                    >
-                      {[1, 2, 3, 5, 10, 15, 30].map((m) => (
-                        <option key={m} value={m}>
-                          Every {m} minutes
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-2 text-[11px] text-neutral-500">
-                      After each manual Save or Save As, the backup file is refreshed immediately when this option is on.
-                    </p>
+                    <label className="flex cursor-pointer items-start gap-3">
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4 shrink-0 rounded border-neutral-600 bg-neutral-900 accent-blue-600"
+                        checked={files.backupEnabled !== false}
+                        onChange={async (e) => {
+                          const on = e.target.checked;
+                          if (!on) {
+                            setPreferences({ files: { ...files, backupEnabled: false } });
+                            return;
+                          }
+                          if (await verifySavePathExists()) {
+                            setPreferences({ files: { ...files, backupEnabled: true } });
+                          }
+                        }}
+                      />
+                      <span>
+                        <span className="text-sm font-medium text-neutral-200">Secondary Backup (Sidecar)</span>
+                        <span className="mt-1 block text-xs text-neutral-500">
+                          Periodically writes a separate copy next to your main file named <span className="font-mono">Name.bak.sbproj</span>. Use this to recover an older state if you make a mistake.
+                        </span>
+                      </span>
+                    </label>
+
+                    <div className="mt-4 pl-7">
+                      <label className="mb-2 block text-xs text-neutral-400">Backup Interval</label>
+                      <select
+                        className="w-full max-w-xs rounded-lg border border-neutral-700 bg-[#141414] px-3 py-2 text-sm text-neutral-200"
+                        value={files.backupIntervalMinutes ?? 30}
+                        disabled={files.backupEnabled === false}
+                        onChange={(e) =>
+                          setPreferences({
+                            files: { ...files, backupIntervalMinutes: Number(e.target.value) },
+                          })
+                        }
+                      >
+                        {[1, 2, 3, 5, 10, 15, 30, 60, 120].map((m) => (
+                          <option key={m} value={m}>
+                            Every {m} minutes
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
                 </section>
@@ -536,8 +583,7 @@ export const Preferences = () => {
                         <span className="text-sm font-medium text-neutral-200">Auto-capitalize in Action & Dialogue</span>
                         <span className="mt-1 block text-xs text-neutral-500">
                           Uppercases the first letter of a new line and the first letter after a sentence end (. ! ?) followed by a
-                          space. If you change a
-                          letter to lowercase (typing or selection), it will not be forced back to uppercase.
+                          space.
                         </span>
                       </span>
                     </label>
@@ -546,7 +592,7 @@ export const Preferences = () => {
                   <div className="rounded-xl border border-neutral-800 bg-[#1a1a1a] p-4">
                     <div className="mb-3 text-sm font-medium text-neutral-200">Layout</div>
                     <p className="mb-3 text-xs text-neutral-500">
-                      Print adds page breaks and numbers along the side. Continuous is one long scrolling page.
+                      Print adds page breaks. Continuous has none.
                     </p>
                     <div className="flex flex-col gap-2">
                       {(
@@ -604,7 +650,7 @@ export const Preferences = () => {
 
                   <div>
                     <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-neutral-500">Line type shortcuts</h4>
-                    <p className="mb-3 text-xs text-neutral-500">Click a field, then press the combo (Ctrl/Cmd is detected).</p>
+                    <p className="mb-3 text-xs text-neutral-500">Click a field, then press a key/combo.</p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       <ShortcutInput
                         label="Scene heading"

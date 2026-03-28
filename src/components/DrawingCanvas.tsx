@@ -10,7 +10,7 @@ import { collectOnionNeighborStacks, computeOnionOpacities } from '../lib/onionS
 import { STORYBOARD_CLIPBOARD_STORAGE_KEY, parseStoryboardClipboard, serializeStoryboardClipboard, offsetStrokesBy, selectionBoundsFromStrokes } from '../lib/storyboardClipboard';
 import { computeVectorBucketFillPaths, applyRasterBucketFromCompositeCanvas } from '../lib/vectorPaintBucket';
 import { panelLayersHaveDrawableContent, countInkPixelsInStoryboardThumbnailDataUrl } from '../lib/storyboardThumbnailSafety';
-import { shouldSuppressStoryboardCanvasGlobalKeys } from '../lib/keyboardTargets';
+import { isKeyboardEventTargetTextEntry } from '../lib/keyboardTargets';
 import { Logger } from '../lib/logger';
 
 import { StoryboardToolbar, StoryboardTopBar, StoryboardSidebar, type ToolType, type BrushPreset, type BucketMode } from './storyboard/StoryboardUI';
@@ -25,10 +25,10 @@ export const DrawingCanvas = () => {
   const { project, activePanelId, activeLayerId, timelinePlayheadSec, updateLayerStrokes, commitHistory } = projectState;
   const { preferences } = useAppStore();
 
-  const [tool, setTool] = useState<ToolType>((preferences.brushSettings.lastTool as ToolType) || 'pen');
-  const [brushPreset, setBrushPreset] = useState<BrushPreset>((preferences.brushSettings.lastPreset as BrushPreset) || 'solid');
-  const [color, setColor] = useState(preferences.brushSettings.lastColor || '#000000');
-  const [brushSize, setBrushSize] = useState(preferences.brushSettings.lastSize || 5);
+  const [tool, setTool] = useState<ToolType>((preferences.brushSettings?.lastTool as ToolType) || 'pen');
+  const [brushPreset, setBrushPreset] = useState<BrushPreset>((preferences.brushSettings?.lastPreset as BrushPreset) || 'solid');
+  const [color, setColor] = useState(preferences.brushSettings?.lastColor || '#000000');
+  const [brushSize, setBrushSize] = useState(preferences.brushSettings?.lastSize || 5);
   const [zoom, setZoom] = useState(0.5);
 
   const [selectedStrokeIndices, setSelectedStrokeIndices] = useState<Set<number>>(new Set());
@@ -40,9 +40,8 @@ export const DrawingCanvas = () => {
   const [bucketMode, setBucketMode] = useState<BucketMode>('all');
   const [showBucketMenu, setShowBucketMenu] = useState(false);
   
-  // NEW: Sidebar Layout State
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [sidebarWidth, setSidebarWidth] = useState(288); // Default w-72 (72 * 4px)
+  const [sidebarWidth, setSidebarWidth] = useState(288); 
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -294,7 +293,7 @@ export const DrawingCanvas = () => {
     engineRef.current?.updateState({
       tool, brushPreset, color, brushSize, activeLayerId, activePanelId, panelLayers: panelLayersForCanvas,
       onionBeforeStacks, onionAfterStacks, underlayStacks, onionSkinEnabled, onionPrefs: onionSkinPrefs,
-      onionBeforeOpacities, onionAfterOpacities, // FIXED: Injecting the explicitly tracked arrays
+      onionBeforeOpacities, onionAfterOpacities,
       selectedStrokeIndices, cameraTransform, layerTransform, zoom
     });
   }, [tool, brushPreset, color, brushSize, activeLayerId, activePanelId, panelLayersForCanvas, onionBeforeStacks, onionAfterStacks, onionBeforeOpacities, onionAfterOpacities, underlayStacks, onionSkinEnabled, onionSkinPrefs, selectedStrokeIndices, cameraTransform, layerTransform, zoom]);
@@ -328,7 +327,8 @@ export const DrawingCanvas = () => {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (shouldSuppressStoryboardCanvasGlobalKeys(e)) return;
+      // THE FIX: We use the new exported function to check if we are typing in an input
+      if (isKeyboardEventTargetTextEntry(e.target)) return;
 
       const key = e.key.toLowerCase();
       const comboPieces: string[] = [];
@@ -340,8 +340,9 @@ export const DrawingCanvas = () => {
       const combo = comboPieces.length > 0 ? `${comboPieces.join('+')}+${val}` : '';
       const sc = preferences.shortcuts;
 
-      if (combo === sc.undo) { e.preventDefault(); useProjectStore.getState().undo(); return; }
-      if (combo === sc.redo) { e.preventDefault(); useProjectStore.getState().redo(); return; }
+      // Note: Undo/Redo are now completely handled by GlobalShortcutManager.tsx!
+      // We only intercept stroke-editing commands here.
+
       if (combo === sc.zoomIn) { e.preventDefault(); handleZoomIn(); return; }
       if (combo === sc.zoomOut) { e.preventDefault(); handleZoomOut(); return; }
 

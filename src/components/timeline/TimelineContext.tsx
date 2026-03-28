@@ -18,7 +18,6 @@ import {
 import { decodeAudioFromDataUri, downsamplePeaks } from '../../lib/audioClipDecode';
 import { probeVideoDurationFromDataUri } from '../../lib/videoClipMetadata';
 import { useTimelinePlayback } from '../../hooks/useTimelinePlayback';
-import { isKeyboardEventTargetTextEntry } from '../../lib/keyboardTargets';
 import { collectAnimaticExportAudioClips } from '../../lib/animaticAudioExport';
 import { buildAnimaticSegmentsForProject } from '../../lib/animaticSegments';
 import { getPanelIdFromDataTransfer } from '../../lib/panelTimelineDnD';
@@ -508,6 +507,13 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     draggingPlayhead.current = true;
     seekTo(t);
   }, [pxPerSec, snapTime, timelineDuration, seekTo]);
+
+  // Use the Custom Event from GlobalShortcutManager instead of binding Spacebar here directly!
+  useEffect(() => {
+    const onToggle = () => handlePlayPause();
+    window.addEventListener('shortcut:play-pause', onToggle);
+    return () => window.removeEventListener('shortcut:play-pause', onToggle);
+  }, [handlePlayPause]);
 
   const value = {
     scrollRef, leftColScrollRef, isPlaying, setIsPlaying, currentTime, setCurrentTime,

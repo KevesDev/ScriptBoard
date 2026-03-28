@@ -62,9 +62,12 @@ export interface AppPreferences {
   onionSkin: OnionSkinPreferences;
   /** Project file backups & autosave (renderer + Electron main). */
   files: {
-    /** Write `Name.autosave.sbproj` next to the main file on an interval. */
+    /** Overwrites the main .sbproj file on an interval. */
     autoSaveEnabled: boolean;
     autoSaveIntervalMinutes: number;
+    /** Writes `Name.autosave.sbproj` next to the main file on an interval. */
+    backupEnabled: boolean;
+    backupIntervalMinutes: number;
   };
   customBrushes: BrushConfig[];
 }
@@ -172,6 +175,8 @@ const defaultPreferences: AppPreferences = {
   files: {
     autoSaveEnabled: true,
     autoSaveIntervalMinutes: 5,
+    backupEnabled: true,
+    backupIntervalMinutes: 30,
   },
   customBrushes: []
 };

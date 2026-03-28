@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Layout, Model, TabNode } from 'flexlayout-react';
-import type { IJsonModel } from 'flexlayout-react';
+import { Layout, Model, TabNode, Actions } from 'flexlayout-react';
+import type { IJsonModel, Action } from 'flexlayout-react';
 import 'flexlayout-react/style/dark.css';
 import { IPC_CHANNELS } from '@common/ipc';
 import type { IpcResponse } from '@common/ipc';
@@ -17,8 +17,8 @@ import { Timeline } from './components/Timeline';
 import { PlotTreeEditor } from './components/PlotTree';
 import { useAppStore } from './store/appStore';
 import { nativeAlert, nativeConfirm } from './lib/focusAfterNativeDialog';
+import { GlobalShortcutManager } from './components/GlobalShortcutManager';
 
-// Error Boundary to catch render errors
 class ComponentErrorBoundary extends React.Component<{children: React.ReactNode, name: string}, {hasError: boolean, error: Error | null}> {
   constructor(props: any) {
     super(props);
@@ -51,7 +51,7 @@ const layoutConfig: IJsonModel = {
   global: {
     tabEnableClose: false,
     tabEnableRename: false,
-    tabSetEnableTabStrip: true, // Need tab strips so we can tab between things
+    tabSetEnableTabStrip: true, 
   },
   borders: [],
   layout: {
@@ -65,11 +65,13 @@ const layoutConfig: IJsonModel = {
         children: [
           {
             type: 'tab',
+            id: 'tab-storyboard',
             name: 'Storyboard Mode',
             component: 'storyboardWorkspace',
           },
           {
             type: 'tab',
+            id: 'tab-script',
             name: 'Script Mode',
             component: 'scriptWorkspace',
           }
@@ -169,6 +171,7 @@ function GlobalMenuBar({
 function App() {
   const [model] = useState<Model>(Model.fromJson(layoutConfig));
   const [exportHubOpen, setExportHubOpen] = useState(false);
+  const activeModeRef = useRef<'script' | 'storyboard'>('storyboard');
   const project = useProjectStore((s) => s.project);
 
   useEffect(() => {
@@ -176,6 +179,17 @@ function App() {
       useProjectStore.getState().setProject(generateEmptyProject());
     }
   }, []);
+
+  const handleFlexLayoutAction = (action: Action) => {
+    if (action.type === Actions.SELECT_TAB) {
+      if (action.data.tabNode === 'tab-script') {
+        activeModeRef.current = 'script';
+      } else if (action.data.tabNode === 'tab-storyboard') {
+        activeModeRef.current = 'storyboard';
+      }
+    }
+    return action;
+  };
 
   const handleNewProject = async () => {
     if (await nativeConfirm('Are you sure? Unsaved changes will be lost.')) {
@@ -197,8 +211,8 @@ function App() {
       const serializedProject = JSON.parse(JSON.stringify(project));
       const res: IpcResponse = await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_SAVE, serializedProject);
       if (res.success) {
-        const files = useAppStore.getState().preferences.files;
-        if (files?.autoSaveEnabled !== false) {
+        const files = useAppStore.getState().preferences?.files;
+        if (files?.backupEnabled !== false) {
           const latest = useProjectStore.getState().project;
           if (latest) {
             void window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_AUTOSAVE, latest).catch(() => {});
@@ -229,8 +243,8 @@ function App() {
       const serializedProject = JSON.parse(JSON.stringify(project));
       const res: IpcResponse = await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_SAVE_AS, serializedProject);
       if (res.success) {
-        const files = useAppStore.getState().preferences.files;
-        if (files?.autoSaveEnabled !== false && window.ipcRenderer) {
+        const files = useAppStore.getState().preferences?.files;
+        if (files?.backupEnabled !== false && window.ipcRenderer) {
           const latest = useProjectStore.getState().project;
           if (latest) {
             void window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_AUTOSAVE, latest).catch(() => {});
@@ -280,52 +294,67 @@ function App() {
     }
   };
 
-  const autoSaveEnabled = useAppStore((s) => s.preferences.files?.autoSaveEnabled ?? true);
-  const autoSaveMinutes = useAppStore((s) => s.preferences.files?.autoSaveIntervalMinutes ?? 5);
-  const autoSavePromptedIdsRef = useRef<Set<string>>(new Set());
+  const autoSaveEnabled = useAppStore((s) => s.preferences?.files?.autoSaveEnabled ?? true);
+  const autoSaveMinutes = useAppStore((s) => s.preferences?.files?.autoSaveIntervalMinutes ?? 5);
 
-  const runAutosave = useCallback(async () => {
+  const backupEnabled = useAppStore((s) => s.preferences?.files?.backupEnabled ?? true);
+  const backupMinutes = useAppStore((s) => s.preferences?.files?.backupIntervalMinutes ?? 30);
+
+  const backupPromptedIdsRef = useRef<Set<string>>(new Set());
+
+  const runBackup = useCallback(async () => {
     if (!window.ipcRenderer) return;
     const project = useProjectStore.getState().project;
     if (!project) return;
-    const files = useAppStore.getState().preferences.files;
-    if (files?.autoSaveEnabled === false) return;
+    if (!backupEnabled) return;
     try {
       const res: IpcResponse<{ backupPath?: string }> = await window.ipcRenderer.invoke(
-        IPC_CHANNELS.PROJECT_AUTOSAVE,
+        IPC_CHANNELS.PROJECT_AUTOSAVE, 
         project,
       );
       if (res.success) return;
       if (res.code === 'NO_SAVE_PATH') {
-        if (autoSavePromptedIdsRef.current.has(project.id)) return;
-        autoSavePromptedIdsRef.current.add(project.id);
+        if (backupPromptedIdsRef.current.has(project.id)) return;
+        backupPromptedIdsRef.current.add(project.id);
         await nativeAlert(
-          'Automatic backups are on, but this project is not saved to a file yet.\n\n' +
-            'Use File → Save or Save As once. After that, ScriptBoard writes a backup next to your main file as Name.autosave.sbproj.',
+          'Secondary Backups are on, but this project is not saved to a file yet.\n\n' +
+            'Use File → Save or Save As once. After that, ScriptBoard automatically writes the backup file.',
         );
       }
     } catch (e) {
-      console.error('Autosave failed:', e);
+      console.error('Backup failed:', e);
     }
-  }, []);
+  }, [backupEnabled]);
+
+  const runAutoSaveMain = useCallback(async () => {
+    if (!window.ipcRenderer) return;
+    const project = useProjectStore.getState().project;
+    if (!project) return;
+    if (!autoSaveEnabled) return;
+    try {
+      const q = await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_QUERY_SAVE_PATH, project.id);
+      if (!q?.data?.hasPath) return; 
+      
+      const serializedProject = JSON.parse(JSON.stringify(project));
+      await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_SAVE, serializedProject);
+    } catch (e) {
+      console.error('Main Autosave failed:', e);
+    }
+  }, [autoSaveEnabled]);
 
   useEffect(() => {
     if (!autoSaveEnabled) return;
     const minutes = Math.min(120, Math.max(1, autoSaveMinutes));
-    const id = window.setInterval(() => void runAutosave(), minutes * 60 * 1000);
+    const id = window.setInterval(() => void runAutoSaveMain(), minutes * 60 * 1000);
     return () => clearInterval(id);
-  }, [autoSaveEnabled, autoSaveMinutes, runAutosave]);
+  }, [autoSaveEnabled, autoSaveMinutes, runAutoSaveMain]);
 
   useEffect(() => {
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        handleSaveProject();
-      }
-    };
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, []);
+    if (!backupEnabled) return;
+    const minutes = Math.min(120, Math.max(1, backupMinutes));
+    const id = window.setInterval(() => void runBackup(), minutes * 60 * 1000);
+    return () => clearInterval(id);
+  }, [backupEnabled, backupMinutes, runBackup]);
 
   const factory = (node: TabNode) => {
     const component = node.getComponent();
@@ -402,6 +431,11 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-neutral-950">
+      <GlobalShortcutManager 
+        getActiveMode={() => activeModeRef.current}
+        onSave={handleSaveProject} 
+        onSaveAs={handleSaveProjectAs} 
+      />
       <TitleBar />
       <GlobalMenuBar 
         onNewProject={handleNewProject}
@@ -414,7 +448,11 @@ function App() {
         onExit={() => window.ipcRenderer?.send(IPC_CHANNELS.WINDOW_CLOSE)}
       />
       <div className="flex-1 relative">
-        <Layout model={model} factory={factory} />
+        <Layout 
+          model={model} 
+          factory={factory} 
+          onAction={handleFlexLayoutAction}
+        />
       </div>
       <Preferences />
       <ExportHub open={exportHubOpen} onClose={() => setExportHubOpen(false)} project={project} />

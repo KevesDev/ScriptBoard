@@ -53,13 +53,13 @@ export class ProjectArchiver {
 
   /**
    * Writes an automatic backup next to the main project file:
-   * `MyBoard.sbproj` → `MyBoard.autosave.sbproj` in the same folder.
+   * `MyBoard.sbproj` → `MyBoard.bak.sbproj` in the same folder.
    */
   static async autoSaveProject(project: Project, mainProjectFilePath: string): Promise<string> {
     const dir = path.dirname(mainProjectFilePath);
     const ext = path.extname(mainProjectFilePath) || '.sbproj';
     const stem = path.basename(mainProjectFilePath, ext);
-    const backupPath = path.join(dir, `${stem}.autosave.sbproj`);
+    const backupPath = path.join(dir, `${stem}.bak.sbproj`);
     await fs.mkdir(dir, { recursive: true });
     await this.saveProject(project, backupPath);
     return backupPath;
