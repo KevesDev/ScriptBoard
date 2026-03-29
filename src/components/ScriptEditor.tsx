@@ -52,7 +52,9 @@ export const ScriptEditor: React.FC = () => {
   const paginationEnabledRef = useRef(scriptLayout === 'print');
   paginationEnabledRef.current = scriptLayout === 'print';
   
+  // AAA FIX: Track the editor instance alongside the content string to prevent blank states on load
   const lastSyncedContentRef = useRef<string | null>(null);
+  const lastSyncedEditorRef = useRef<any>(null);
   
   const paperRef = useRef<HTMLDivElement>(null);
   const [paperScrollHeight, setPaperScrollHeight] = useState(US_LETTER_PAGE_CSS_PX);
@@ -359,7 +361,10 @@ export const ScriptEditor: React.FC = () => {
     };
     if (activeScriptPageId) findPage(project.rootScriptFolder);
 
-    if (storeBase64 !== lastSyncedContentRef.current) {
+    // If the editor instance is newly mounted, force a sync even if the base64 string matches the last project!
+    const isNewEditorInstance = lastSyncedEditorRef.current !== editor;
+
+    if (storeBase64 !== lastSyncedContentRef.current || isNewEditorInstance) {
       loadingPageContentRef.current = true;
       try {
         const decoded = base64ToUtf8Text(storeBase64);
@@ -379,6 +384,7 @@ export const ScriptEditor: React.FC = () => {
         }
         
         lastSyncedContentRef.current = storeBase64;
+        lastSyncedEditorRef.current = editor; // Register the fresh instance
         updateOutline(editor);
       } finally {
         loadingPageContentRef.current = false;
@@ -498,13 +504,9 @@ export const ScriptEditor: React.FC = () => {
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e] text-neutral-200 overflow-hidden font-sans">
       
-      {/* Injects scoped CSS block to visually hide the Tiptap 
-          page break nodes without removing them from the DOM AST, preserving math */}
       {preferences.scriptSettings?.showPageBreaks === false && (
         <style>{`
-          .screenplay-editor hr.page-break,
-          .screenplay-editor div.page-break,
-          .screenplay-editor .script-page-break {
+          .screenplay-editor .script-page-break-decorator {
             opacity: 0 !important;
             pointer-events: none !important;
           }
