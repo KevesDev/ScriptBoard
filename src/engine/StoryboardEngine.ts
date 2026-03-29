@@ -59,6 +59,9 @@ export class StoryboardEngine {
   private activePoints: number[] = [];
   private dragStartPoint = { x: 0, y: 0 };
   
+  // Store a math seed for the lifetime of a single drag to prevent texture boiling
+  private activeStrokeSeed: number = 0; 
+  
   public internalSelection = {
     bounds: null as {x: number, y: number, w: number, h: number} | null,
     marquee: null as {sx: number, sy: number, x: number, y: number} | null,
@@ -192,6 +195,10 @@ export class StoryboardEngine {
 
     this.config.onSelectionChanged(new Set(), null);
     this.isDrawing = true;
+    
+    // Initialize the deterministic seed for this specific stroke
+    this.activeStrokeSeed = Math.floor(Math.random() * 0xffffffff);
+    
     let pressure = e.pointerType === 'pen' ? (e.pressure > 0 ? e.pressure : 0.1) : 0.5;
     this.activePoints = [x, y, pressure];
     this.updateWetCanvas();
@@ -300,7 +307,8 @@ export class StoryboardEngine {
         color: this.state.tool === 'eraser' ? '#ffffff' : this.state.color,
         width: this.state.brushSize * 2,
         points: [...this.activePoints],
-        brushConfig: this.config.getBrushConfig(this.state.tool === 'eraser' ? undefined : this.state.brushPreset)
+        brushConfig: this.config.getBrushConfig(this.state.tool === 'eraser' ? undefined : this.state.brushPreset),
+        seed: this.activeStrokeSeed // Attach the PRNG seed to the finalized stroke
       };
       this.config.onStrokeComplete(finalStroke);
     }
@@ -341,7 +349,8 @@ export class StoryboardEngine {
       color: this.state.tool === 'eraser' ? '#ffffff' : this.state.color,
       width: this.state.brushSize * 2,
       points: this.activePoints,
-      brushConfig: this.config.getBrushConfig(this.state.tool === 'eraser' ? undefined : this.state.brushPreset)
+      brushConfig: this.config.getBrushConfig(this.state.tool === 'eraser' ? undefined : this.state.brushPreset),
+      seed: this.activeStrokeSeed // Use the seed for live-drawing consistency
     };
 
     if (stroke.brushConfig?.textureBase64 && !['line', 'rectangle', 'ellipse'].includes(stroke.tool)) {

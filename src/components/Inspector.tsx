@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useProjectStore } from '../store/projectStore';
-import { Link as LinkIcon, ExternalLink, X } from 'lucide-react';
+import { Link as LinkIcon, ExternalLink, X, HelpCircle } from 'lucide-react';
 import type { PanelTransitionType } from '@common/models';
 import { getSceneScriptContext, trimBlocksForDisplay, type ScriptSceneBlock } from '../lib/scriptSceneExcerpt';
 import { getSceneTitlesFromStoredContent } from '../lib/scriptEditorUtils';
@@ -140,7 +140,10 @@ export const Inspector = () => {
       
       {activePanelId && activePanel && (
         <div className="border-b border-neutral-800 p-4 shrink-0">
-          <h3 className="mb-2 font-bold text-neutral-100">Panel timing</h3>
+          <h3 className="mb-2 font-bold text-neutral-100 flex items-center gap-1.5">
+            Panel timing
+            <HelpCircle size={14} className="text-neutral-500 hover:text-neutral-300 cursor-help transition-colors" title="Controls how long this panel displays and transitions during animatic playback." />
+          </h3>
           <label className="mb-2 block text-xs text-neutral-400">
             Duration (ms)
             <input
@@ -283,7 +286,6 @@ export const Inspector = () => {
         </div>
       )}
 
-      {/* --- BOTTOM HALF: SCRIPT CONTEXT & CAPTIONS --- */}
       <div className="flex-1 flex flex-col p-4 bg-neutral-950 min-h-0">
         
         {activeSceneId && !activePanelId && activeScene && (
@@ -354,7 +356,6 @@ export const Inspector = () => {
                   )}
                 </div>
                 
-                {/* Go to Script Button switches tab globally */}
                 {panelScriptContext && (
                   <button
                     type="button"
@@ -396,7 +397,6 @@ export const Inspector = () => {
                     )}
                 </div>
                 
-                {/* Go to Script Button (Mini) */}
                 <button
                   type="button"
                   className="w-full flex items-center justify-center gap-1.5 rounded border border-neutral-700 bg-neutral-800/50 py-1.5 text-[11px] font-medium text-sky-300 transition-colors hover:border-sky-500 hover:bg-neutral-800"

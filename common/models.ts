@@ -30,6 +30,7 @@ export type Stroke = {
   fillPaths?: number[][]; // Array of closed loops (flat [x,y,x,y...]). Used by 'fill' tool.
   color: string;
   width: number;
+  seed?: number; //  Seeded deterministic PRNG lock to prevent texture boiling
 };
 
 export interface Layer {

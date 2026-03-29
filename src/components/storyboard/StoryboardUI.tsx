@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { useProjectStore } from '../../store/projectStore';
 import { useAppStore, defaultBrushes } from '../../store/appStore';
 import { 
@@ -7,7 +7,7 @@ import {
   Minus, Square, Circle, Settings2, Palette,
   Brush, Pencil, PenTool, ZoomIn, ZoomOut, Maximize,
   Eye, EyeOff, ChevronUp, ChevronDown, Pipette,
-  Video, PanelRightClose, PanelRightOpen
+  Video, PanelRightClose, PanelRightOpen, ChevronRight
 } from 'lucide-react';
 import type { Layer, BrushConfig } from '@common/models';
 
@@ -151,7 +151,11 @@ export const StoryboardSidebar = ({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Custom Brush Pipeline
+  // Layout State for Resizable Panels
+  const [toolPanelHeight, setToolPanelHeight] = useState(300);
+  const [colorPanelHeight, setColorPanelHeight] = useState(160);
+  const [showAdvancedBrush, setShowAdvancedBrush] = useState(false);
+
   const handleImportBrush = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -172,6 +176,7 @@ export const StoryboardSidebar = ({
       };
       addCustomBrush(newBrush);
       handleBrushPresetChange(newBrush.id);
+      setShowAdvancedBrush(true); // Open settings so they can tweak it immediately
     };
     reader.readAsDataURL(file);
     e.target.value = '';
@@ -183,11 +188,13 @@ export const StoryboardSidebar = ({
 
   return (
     <div className="w-full h-full flex flex-col bg-[#323232] text-sm overflow-hidden">
-      <div className="flex flex-col border-b border-black shrink-0 max-h-[60%] overflow-y-auto custom-scrollbar">
-        <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black sticky top-0 z-10 shadow-sm">
+      
+      {/* 1. TOOL PROPERTIES PANEL */}
+      <div style={{ height: toolPanelHeight, flexBasis: toolPanelHeight }} className="flex flex-col shrink-0 overflow-hidden min-h-[60px]">
+        <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black shrink-0 sticky top-0 z-10 shadow-sm">
           <Settings2 size={14} /> Tool Properties
         </div>
-        <div className="p-4 flex flex-col gap-4">
+        <div className="p-4 flex flex-col gap-4 overflow-y-auto custom-scrollbar flex-1">
           {(tool === 'pen' || tool === 'eraser') ? (
             <>
               {tool === 'pen' && (
@@ -224,69 +231,94 @@ export const StoryboardSidebar = ({
               </div>
               
               {tool === 'pen' && (
-                <div className="mt-2 pt-4 border-t border-black/50 flex flex-col gap-3">
-                  <div className="text-xs text-neutral-400 uppercase tracking-wider font-semibold flex justify-between items-center">
-                    <span>Brush Settings</span>
+                <div className="mt-2 pt-3 border-t border-black/50 flex flex-col gap-3">
+                  <div className="flex justify-between items-center">
+                    <button 
+                      onClick={() => setShowAdvancedBrush(!showAdvancedBrush)}
+                      className="text-xs text-neutral-400 uppercase tracking-wider font-semibold flex items-center gap-1 hover:text-neutral-200 transition-colors focus:outline-none"
+                    >
+                      {showAdvancedBrush ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      Advanced Settings
+                    </button>
                     {isCustom ? (
-                      <button onClick={() => { removeCustomBrush(brushPreset); handleBrushPresetChange('solid'); }} className="text-red-400 hover:text-red-300 flex items-center gap-1 transition-colors"><Trash2 size={12}/> Delete</button>
+                      <button onClick={() => { removeCustomBrush(brushPreset); handleBrushPresetChange('solid'); }} className="text-red-400 hover:text-red-300 flex items-center gap-1 text-xs transition-colors"><Trash2 size={12}/> Delete</button>
                     ) : isOverriddenDefault ? (
-                      <button onClick={() => { removeCustomBrush(brushPreset); }} className="text-amber-400 hover:text-amber-300 flex items-center gap-1 transition-colors"><Undo size={12}/> Reset</button>
+                      <button onClick={() => { removeCustomBrush(brushPreset); }} className="text-amber-400 hover:text-amber-300 flex items-center gap-1 text-xs transition-colors"><Undo size={12}/> Reset</button>
                     ) : null}
                   </div>
                   
-                  <div>
-                    <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Spacing</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.spacing * 100)}%</span></label>
-                    <input type="range" min="1" max="200" value={Math.round(currentBrush.spacing * 100)} onChange={e => updateCustomBrush(brushPreset, { spacing: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
-                  </div>
-                  <div>
-                    <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Scatter</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.scatter * 100)}%</span></label>
-                    <input type="range" min="0" max="200" value={Math.round(currentBrush.scatter * 100)} onChange={e => updateCustomBrush(brushPreset, { scatter: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
-                  </div>
-                  <div>
-                    <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Flow (Opacity)</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.flow * 100)}%</span></label>
-                    <input type="range" min="1" max="100" value={Math.round(currentBrush.flow * 100)} onChange={e => updateCustomBrush(brushPreset, { flow: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
-                  </div>
+                  {showAdvancedBrush && (
+                    <div className="flex flex-col gap-3 animate-in fade-in slide-in-from-top-2 duration-200">
+                      <div>
+                        <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Spacing</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.spacing * 100)}%</span></label>
+                        <input type="range" min="1" max="200" value={Math.round(currentBrush.spacing * 100)} onChange={e => updateCustomBrush(brushPreset, { spacing: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Scatter</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.scatter * 100)}%</span></label>
+                        <input type="range" min="0" max="200" value={Math.round(currentBrush.scatter * 100)} onChange={e => updateCustomBrush(brushPreset, { scatter: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
+                      </div>
+                      <div>
+                        <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Flow (Opacity)</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.flow * 100)}%</span></label>
+                        <input type="range" min="1" max="100" value={Math.round(currentBrush.flow * 100)} onChange={e => updateCustomBrush(brushPreset, { flow: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
+                      </div>
 
-                  <div className="grid grid-cols-2 gap-2 mt-1">
-                    <div>
-                      <label className="mb-1 block text-[10px] text-neutral-300">Rotation Mode</label>
-                      <select value={currentBrush.rotationMode} onChange={e => updateCustomBrush(brushPreset, { rotationMode: e.target.value as any })} className="w-full bg-[#151515] border border-neutral-700 rounded px-1.5 py-1 text-[10px] text-neutral-200 outline-none">
-                        <option value="fixed">Fixed</option>
-                        <option value="path">Follow Path</option>
-                        <option value="random">Random</option>
-                      </select>
+                      <div className="grid grid-cols-2 gap-2 mt-1">
+                        <div>
+                          <label className="mb-1 block text-[10px] text-neutral-300">Rotation Mode</label>
+                          <select value={currentBrush.rotationMode} onChange={e => updateCustomBrush(brushPreset, { rotationMode: e.target.value as any })} className="w-full bg-[#151515] border border-neutral-700 rounded px-1.5 py-1 text-[10px] text-neutral-200 outline-none">
+                            <option value="fixed">Fixed</option>
+                            <option value="path">Follow Path</option>
+                            <option value="random">Random</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[10px] text-neutral-300">Base Angle</label>
+                          <input type="number" min="-360" max="360" value={currentBrush.rotationAngle} onChange={e => updateCustomBrush(brushPreset, { rotationAngle: parseInt(e.target.value) || 0 })} className="w-full bg-[#151515] border border-neutral-700 rounded px-1.5 py-1 text-[10px] text-neutral-200 outline-none" />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-4 mt-1">
+                        <label className="flex items-center gap-1.5 text-[10px] text-neutral-300 cursor-pointer">
+                          <input type="checkbox" checked={currentBrush.pressureSize} onChange={e => updateCustomBrush(brushPreset, { pressureSize: e.target.checked })} className="accent-blue-500" /> Pressure Size
+                        </label>
+                        <label className="flex items-center gap-1.5 text-[10px] text-neutral-300 cursor-pointer">
+                          <input type="checkbox" checked={currentBrush.pressureOpacity} onChange={e => updateCustomBrush(brushPreset, { pressureOpacity: e.target.checked })} className="accent-blue-500" /> Pressure Opacity
+                        </label>
+                      </div>
+
+                      <div className="flex gap-2 mt-2">
+                        <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} className="hidden" onChange={handleImportBrush} />
+                        <button onClick={() => fileInputRef.current?.click()} className="flex-1 text-[10px] py-1.5 bg-[#444] hover:bg-[#555] rounded border border-black text-neutral-300 transition-colors shadow-sm font-medium">Import PNG as Brush...</button>
+                      </div>
                     </div>
-                    <div>
-                      <label className="mb-1 block text-[10px] text-neutral-300">Base Angle</label>
-                      <input type="number" min="-360" max="360" value={currentBrush.rotationAngle} onChange={e => updateCustomBrush(brushPreset, { rotationAngle: parseInt(e.target.value) || 0 })} className="w-full bg-[#151515] border border-neutral-700 rounded px-1.5 py-1 text-[10px] text-neutral-200 outline-none" />
-                    </div>
-                  </div>
-
-                  <div className="flex gap-4 mt-1">
-                    <label className="flex items-center gap-1.5 text-[10px] text-neutral-300 cursor-pointer">
-                      <input type="checkbox" checked={currentBrush.pressureSize} onChange={e => updateCustomBrush(brushPreset, { pressureSize: e.target.checked })} className="accent-blue-500" /> Pressure Size
-                    </label>
-                    <label className="flex items-center gap-1.5 text-[10px] text-neutral-300 cursor-pointer">
-                      <input type="checkbox" checked={currentBrush.pressureOpacity} onChange={e => updateCustomBrush(brushPreset, { pressureOpacity: e.target.checked })} className="accent-blue-500" /> Pressure Opacity
-                    </label>
-                  </div>
-
-                  <div className="flex gap-2 mt-2">
-                    <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} className="hidden" onChange={handleImportBrush} />
-                    <button onClick={() => fileInputRef.current?.click()} className="flex-1 text-[10px] py-1.5 bg-[#444] hover:bg-[#555] rounded border border-black text-neutral-300 transition-colors shadow-sm font-medium">Import PNG as Brush...</button>
-                  </div>
+                  )}
                 </div>
               )}
             </>
           ) : (
-            <div className="text-neutral-500 text-xs italic">{tool === 'select' ? 'Select Tool active.' : tool === 'eyedropper' ? 'Click on canvas to pick color.' : tool === 'paintbucket' ? 'Paint bucket active. Right-click toolbar for layer options.' : 'Shape tool active.'}</div>
+            <div className="text-neutral-500 text-xs italic">
+              {tool === 'select' ? 'Select Tool active.' : tool === 'eyedropper' ? 'Click on canvas to pick color.' : tool === 'paintbucket' ? 'Paint bucket active. Right-click toolbar for layer options.' : 'Shape tool active.'}
+            </div>
           )}
         </div>
       </div>
 
-      <div className="flex flex-col border-b border-black shrink-0">
-        <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black"><Palette size={14} /> Colour</div>
-        <div className="p-4 flex flex-col gap-4">
+      {/* --- HORIZONTAL SPLITTER 1 --- */}
+      <div 
+        className="h-1 cursor-row-resize bg-black hover:bg-blue-500 shrink-0 transition-colors z-20"
+        onPointerDown={(e) => {
+          const startY = e.clientY;
+          const startH = toolPanelHeight;
+          const onMove = (me: PointerEvent) => setToolPanelHeight(Math.max(60, startH + (me.clientY - startY)));
+          const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+          window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+        }}
+      />
+
+      {/* 2. COLOUR PANEL */}
+      <div style={{ height: colorPanelHeight, flexBasis: colorPanelHeight }} className="flex flex-col shrink-0 overflow-hidden min-h-[60px]">
+        <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black shrink-0"><Palette size={14} /> Colour</div>
+        <div className="p-4 flex flex-col gap-4 overflow-y-auto custom-scrollbar flex-1">
            <div className="flex gap-4 items-start">
              <div className="w-16 h-16 rounded shadow-inner border-2 border-neutral-900 shrink-0 relative overflow-hidden">
                <div className="absolute inset-0" style={{backgroundColor: color}}></div>
@@ -306,6 +338,19 @@ export const StoryboardSidebar = ({
         </div>
       </div>
 
+      {/* --- HORIZONTAL SPLITTER 2 --- */}
+      <div 
+        className="h-1 cursor-row-resize bg-black hover:bg-blue-500 shrink-0 transition-colors z-20"
+        onPointerDown={(e) => {
+          const startY = e.clientY;
+          const startH = colorPanelHeight;
+          const onMove = (me: PointerEvent) => setColorPanelHeight(Math.max(60, startH + (me.clientY - startY)));
+          const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
+          window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
+        }}
+      />
+
+      {/* 3. LAYERS PANEL */}
       <div className="flex-1 flex flex-col min-h-0 bg-[#2a2a2a] overflow-hidden">
         <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex justify-between items-center border-b border-black shadow-sm shrink-0">
           <div className="flex items-center gap-2"><LayersIcon size={14} /> Layers</div>

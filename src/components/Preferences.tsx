@@ -10,7 +10,7 @@ type PrefCategory = 'files' | 'storyboard' | 'script';
 const CATEGORY_META: { id: PrefCategory; label: string; description: string; icon: React.ReactNode }[] = [
   { id: 'files', label: 'Files & backups', description: 'Autosave & project copies', icon: <FolderArchive size={18} /> },
   { id: 'storyboard', label: 'Storyboard', description: 'Canvas, zoom, pan', icon: <Keyboard size={18} /> },
-  { id: 'script', label: 'Script', description: 'Font & line shortcuts', icon: <FileText size={18} /> },
+  { id: 'script', label: 'Script', description: 'Font & formatting defaults', icon: <FileText size={18} /> },
 ];
 
 export const Preferences = () => {
@@ -20,6 +20,7 @@ export const Preferences = () => {
   const [activeCategory, setActiveCategory] = useState<PrefCategory>('files');
 
   const files = preferences.files ?? { autoSaveEnabled: true, autoSaveIntervalMinutes: 5, backupEnabled: true, backupIntervalMinutes: 30 };
+  const scriptSettings = preferences.scriptSettings ?? { fontSize: 14, autoCapitalizeFirstLetter: true, layout: 'print', showPageBreaks: true };
 
   if (!isPreferencesOpen) return null;
 
@@ -251,8 +252,39 @@ export const Preferences = () => {
                 <section className="space-y-6">
                   <div>
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-400">Script editor</h3>
+                    <p className="mt-1 text-xs text-neutral-500">Adjust how your script looks and feels while writing.</p>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
+
+                  {/* AAA FIX: Implemented Font Size and visual Page Break toggles */}
+                  <div className="rounded-xl border border-neutral-800 bg-[#1a1a1a] p-4 space-y-5">
+                    <div>
+                      <label className="flex justify-between text-sm font-medium text-neutral-200 mb-2">
+                        <span>Font Size</span>
+                        <span className="text-neutral-400 font-mono">{scriptSettings.fontSize}px</span>
+                      </label>
+                      <input 
+                        type="range" min="10" max="24" step="1" 
+                        value={scriptSettings.fontSize} 
+                        onChange={(e) => setPreferences({ scriptSettings: { ...scriptSettings, fontSize: parseInt(e.target.value) } })}
+                        className="w-full accent-blue-600 cursor-pointer"
+                      />
+                    </div>
+
+                    <label className="flex cursor-pointer items-start gap-3 pt-4 border-t border-neutral-800">
+                      <input 
+                        type="checkbox" 
+                        className="mt-1 h-4 w-4 shrink-0 rounded border-neutral-600 bg-neutral-900 accent-blue-600" 
+                        checked={scriptSettings.showPageBreaks !== false} 
+                        onChange={(e) => setPreferences({ scriptSettings: { ...scriptSettings, showPageBreaks: e.target.checked } })} 
+                      />
+                      <span>
+                        <span className="text-sm font-medium text-neutral-200">Show visual page breaks</span>
+                        <span className="mt-1 block text-xs text-neutral-500">Display a horizontal line where physical pages split. (Does not affect printing/exporting).</span>
+                      </span>
+                    </label>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2 mt-6">
                     <ShortcutInput label="Scene heading" value={preferences.shortcuts.scriptScene || 'ctrl+1'} onKeyDown={(e) => handleKeyDown(e, 'scriptScene')} />
                     <ShortcutInput label="Action" value={preferences.shortcuts.scriptAction || 'ctrl+2'} onKeyDown={(e) => handleKeyDown(e, 'scriptAction')} />
                     <ShortcutInput label="Character" value={preferences.shortcuts.scriptCharacter || 'ctrl+3'} onKeyDown={(e) => handleKeyDown(e, 'scriptCharacter')} />

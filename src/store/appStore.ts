@@ -50,6 +50,7 @@ export interface AppPreferences {
     fontSize: number;
     autoCapitalizeFirstLetter: boolean;
     layout: ScriptEditorLayout;
+    showPageBreaks: boolean;
   };
   onionSkin: OnionSkinPreferences;
   files: {
@@ -99,7 +100,7 @@ const defaultPreferences: AppPreferences = {
     scriptTransition: 'ctrl+6',
   },
   brushSettings: { pencilNoise: 0.15, markerOpacity: 0.6, lastTool: 'pen', lastPreset: 'solid', lastColor: '#000000', lastSize: 5 },
-  scriptSettings: { fontSize: 14, autoCapitalizeFirstLetter: true, layout: 'print' },
+  scriptSettings: { fontSize: 14, autoCapitalizeFirstLetter: true, layout: 'print', showPageBreaks: true },
   onionSkin: { panelsBefore: 1, panelsAfter: 1, previousColor: '#ff6b6b', nextColor: '#4dabf7', nearestOpacityPercent: 35, fadePerStep: 0.65, startEnabled: false },
   files: { autoSaveEnabled: true, autoSaveIntervalMinutes: 5, backupEnabled: true, backupIntervalMinutes: 30 },
   customBrushes: []
@@ -122,7 +123,6 @@ export const useAppStore = create<AppState>()(
           newBrushes[existingIdx] = { ...newBrushes[existingIdx], ...config };
           return { preferences: { ...state.preferences, customBrushes: newBrushes } };
         } else {
-          // It's a default brush being overridden for the first time
           const defaultBrush = defaultBrushes[id];
           if (defaultBrush) {
             return { preferences: { ...state.preferences, customBrushes: [...state.preferences.customBrushes, { ...defaultBrush, ...config }] } };

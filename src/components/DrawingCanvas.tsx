@@ -178,7 +178,7 @@ export const DrawingCanvas = () => {
                   const paths = computeVectorBucketFillPaths(L!, x, y, color, CANVAS_WIDTH, CANVAS_HEIGHT, getBrushConfig);
                   if (paths && paths.length > 0) { 
                     commitHistory(); 
-                    updateLayerStrokes(activePanelId, activeLayerId, [...(L!.strokes || []), { tool: 'fill', color, width: 1, points: [], fillPaths: paths }]); 
+                    updateLayerStrokes(activePanelId, activeLayerId, [...(L!.strokes || []), { tool: 'fill', color, width: 1, points: [], fillPaths: paths, seed: Math.floor(Math.random() * 0xffffffff) }]); 
                   } else {
                     Logger.warn('DrawingCanvas', 'Vector fill failed to generate boundaries.');
                   }
@@ -389,10 +389,12 @@ export const DrawingCanvas = () => {
     }
   };
 
-  // --- AAA Global Intent Routing ---
   useEffect(() => {
     const onPanStart = () => { setIsSpacePanning(true); isPanningRef.current = true; };
     const onPanStop = () => { setIsSpacePanning(false); isPanningRef.current = false; };
+
+    const onZoomIn = () => handleZoomIn();
+    const onZoomOut = () => handleZoomOut();
 
     const onDelete = () => {
       const state = useProjectStore.getState();
@@ -454,8 +456,8 @@ export const DrawingCanvas = () => {
       if (b) engineRef.current?.setSelectionBounds(b);
     };
 
-    window.addEventListener('shortcut:zoomIn-down', handleZoomIn);
-    window.addEventListener('shortcut:zoomOut-down', handleZoomOut);
+    window.addEventListener('shortcut:zoomIn-down', onZoomIn);
+    window.addEventListener('shortcut:zoomOut-down', onZoomOut);
     window.addEventListener('shortcut:pan-down', onPanStart);
     window.addEventListener('shortcut:pan-up', onPanStop);
     window.addEventListener('shortcut:space-down', onPanStart);
@@ -466,8 +468,8 @@ export const DrawingCanvas = () => {
     window.addEventListener('shortcut:paste-down', onPaste);
 
     return () => {
-      window.removeEventListener('shortcut:zoomIn-down', handleZoomIn);
-      window.removeEventListener('shortcut:zoomOut-down', handleZoomOut);
+      window.removeEventListener('shortcut:zoomIn-down', onZoomIn);
+      window.removeEventListener('shortcut:zoomOut-down', onZoomOut);
       window.removeEventListener('shortcut:pan-down', onPanStart);
       window.removeEventListener('shortcut:pan-up', onPanStop);
       window.removeEventListener('shortcut:space-down', onPanStart);

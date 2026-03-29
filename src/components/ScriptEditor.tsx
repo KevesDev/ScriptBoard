@@ -46,11 +46,7 @@ import { ScriptMenuBar } from './ScriptMenuBar';
 import { ScriptLeftToolbar } from './ScriptLeftToolbar';
 
 export const ScriptEditor: React.FC = () => {
-  const { 
-    project, activeScriptPageId, setActiveScriptPageId, updateScriptPageContent, 
-    addPageToFolder, removeNode, updateNodeName, updateProjectSettings, updateProjectName 
-  } = useProjectStore();
-  
+  const { project, activeScriptPageId, setActiveScriptPageId, updateScriptPageContent, addPageToFolder, removeNode, updateNodeName, updateProjectSettings, updateProjectName } = useProjectStore();
   const { preferences } = useAppStore();
   const scriptLayout = preferences.scriptSettings?.layout ?? 'print';
   const paginationEnabledRef = useRef(scriptLayout === 'print');
@@ -62,9 +58,9 @@ export const ScriptEditor: React.FC = () => {
   const [paperScrollHeight, setPaperScrollHeight] = useState(US_LETTER_PAGE_CSS_PX);
   const [printGutterMarkers, setPrintGutterMarkers] = useState<{ num: number; top: number }[]>([]);
 
-  const [activeRightTab, setActiveRightTab] = useState<'outline' | 'documents' | 'info' | 'notes' | 'comments'>('documents');
-  const [editingTabId, setEditingTabId] = useState<string | null>(null);
-  const [editingTabName, setEditingTabName] = useState('');
+  const [activeRightTab, setActiveRightTab] = React.useState<'outline' | 'documents' | 'info' | 'notes' | 'comments'>('documents');
+  const [editingTabId, setEditingTabId] = React.useState<string | null>(null);
+  const [editingTabName, setEditingTabName] = React.useState('');
   const editingTabIdRef = useRef<string | null>(null);
   
   useEffect(() => {
@@ -501,6 +497,20 @@ export const ScriptEditor: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e] text-neutral-200 overflow-hidden font-sans">
+      
+      {/* Injects scoped CSS block to visually hide the Tiptap 
+          page break nodes without removing them from the DOM AST, preserving math */}
+      {preferences.scriptSettings?.showPageBreaks === false && (
+        <style>{`
+          .screenplay-editor hr.page-break,
+          .screenplay-editor div.page-break,
+          .screenplay-editor .script-page-break {
+            opacity: 0 !important;
+            pointer-events: none !important;
+          }
+        `}</style>
+      )}
+
       <div className="flex items-center bg-[#282828] border-b border-black overflow-x-auto shrink-0 select-none group">
         {allPages.map(page => (
           <div 
