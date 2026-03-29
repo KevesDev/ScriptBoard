@@ -1,9 +1,10 @@
 import { useState, useMemo } from 'react';
 import { useProjectStore } from '../store/projectStore';
-import { Link as LinkIcon, ExternalLink, X } from 'lucide-react';
+import { Link as LinkIcon, ExternalLink, X, HelpCircle } from 'lucide-react';
 import type { PanelTransitionType } from '@common/models';
 import { getSceneScriptContext, trimBlocksForDisplay, type ScriptSceneBlock } from '../lib/scriptSceneExcerpt';
 import { getSceneTitlesFromStoredContent } from '../lib/scriptEditorUtils';
+import { Logger } from '../lib/logger';
 
 function blockStyle(b: ScriptSceneBlock): string {
   switch (b.type) {
@@ -22,84 +23,114 @@ function blockStyle(b: ScriptSceneBlock): string {
 }
 
 export const Inspector = () => {
-  const {
-    project,
-    activePanelId,
-    activeSceneId,
-    activeLayerId,
-    setActiveScriptPageId,
-    timelinePlayheadSec,
-    commitHistory,
-    updatePanelDurationMs,
-    updatePanelTimelineGapSec,
-    setPanelTransitionOut,
-    updateTimelineCameraKeyframe,
-    updateTimelineLayerKeyframe,
-    linkSceneToScript,
-    updatePanelCaptions
-  } = useProjectStore();
+  const project = useProjectStore(s => s.project);
+  const activePanelId = useProjectStore(s => s.activePanelId);
+  const activeSceneId = useProjectStore(s => s.activeSceneId);
+  const activeLayerId = useProjectStore(s => s.activeLayerId);
+  const timelinePlayheadSec = useProjectStore(s => s.timelinePlayheadSec);
+
+  const setActiveScriptPageId = useProjectStore(s => s.setActiveScriptPageId);
+  const commitHistory = useProjectStore(s => s.commitHistory);
+  const updatePanelDurationMs = useProjectStore(s => s.updatePanelDurationMs);
+  const updatePanelTimelineGapSec = useProjectStore(s => s.updatePanelTimelineGapSec);
+  const setPanelTransitionOut = useProjectStore(s => s.setPanelTransitionOut);
+  const updateTimelineCameraKeyframe = useProjectStore(s => s.updateTimelineCameraKeyframe);
+  const updateTimelineLayerKeyframe = useProjectStore(s => s.updateTimelineLayerKeyframe);
+  const linkSceneToScript = useProjectStore(s => s.linkSceneToScript);
+  const updatePanelCaptions = useProjectStore(s => s.updatePanelCaptions);
 
   const [selectedHeadingToLink, setSelectedHeadingToLink] = useState('');
 
-  // AAA FIX: Aggressive null-safety for all array prototypes
-  const activePanel = project?.scenes?.flatMap((s) => s.panels || [])?.find((p) => p.id === activePanelId);
-  const activeScene = activeSceneId 
-    ? project?.scenes?.find(s => s.id === activeSceneId) 
-    : project?.scenes?.find((s) => s.panels?.some((p) => p.id === activePanelId));
+  const activePanel = useMemo(() => {
+    try {
+      if (!project || !project.scenes) return null;
+      return project.scenes.flatMap((s) => s.panels || []).find((p) => p.id === activePanelId) || null;
+    } catch (e) {
+      Logger.error('Inspector', `activePanel derivation failed: ${e}`);
+      return null;
+    }
+  }, [project, activePanelId]);
+
+  const activeScene = useMemo(() => {
+    try {
+      if (!project || !project.scenes) return null;
+      if (activeSceneId) return project.scenes.find(s => s.id === activeSceneId) || null;
+      return project.scenes.find((s) => (s.panels || []).some((p) => p.id === activePanelId)) || null;
+    } catch (e) {
+      Logger.error('Inspector', `activeScene derivation failed: ${e}`);
+      return null;
+    }
+  }, [project, activeSceneId, activePanelId]);
   
   const animatic = project?.timeline?.animaticEditingMode ?? false;
+  const playhead = timelinePlayheadSec ?? 0;
   const kfTol = 0.05;
 
-  const camKfAtPlayhead = project?.timeline?.cameraKeyframes?.find(
-    (k) => Math.abs(k.timeSec - timelinePlayheadSec) < kfTol,
-  );
+  const camKfAtPlayhead = useMemo(() => {
+    try {
+      if (!project || !project.timeline || !project.timeline.cameraKeyframes) return null;
+      return project.timeline.cameraKeyframes.find((k) => Math.abs((k.timeSec || 0) - playhead) < kfTol) || null;
+    } catch (e) {
+      return null;
+    }
+  }, [project, playhead]);
   
-  const layerKfAtPlayhead =
-    activePanelId && activeLayerId
-      ? project?.timeline?.layerKeyframes?.find(
-          (k) =>
-            k.panelId === activePanelId &&
-            k.layerId === activeLayerId &&
-            Math.abs(k.timeSec - timelinePlayheadSec) < kfTol,
-        )
-      : undefined;
+  const layerKfAtPlayhead = useMemo(() => {
+    try {
+      if (!project || !project.timeline || !project.timeline.layerKeyframes || !activePanelId || !activeLayerId) return null;
+      return project.timeline.layerKeyframes.find(
+        (k) => k.panelId === activePanelId && k.layerId === activeLayerId && Math.abs((k.timeSec || 0) - playhead) < kfTol
+      ) || null;
+    } catch (e) {
+      return null;
+    }
+  }, [project, activePanelId, activeLayerId, playhead]);
 
   const allAvailableHeadings = useMemo(() => {
-    if (!project || !project.rootScriptFolder) return [];
-    const headings: string[] = [];
-    const walk = (folder: any) => {
-      if (!folder || !folder.children) return;
-      for (const child of folder.children) {
-        if (child.type === 'page') {
-          const titles = getSceneTitlesFromStoredContent(child.contentBase64 || '');
-          headings.push(...titles);
-        } else if (child.type === 'folder') {
-          walk(child);
+    try {
+      if (!project || !project.rootScriptFolder) return [];
+      const headings: string[] = [];
+      const walk = (folder: any) => {
+        if (!folder || !folder.children) return;
+        for (const child of folder.children) {
+          if (child.type === 'page') {
+            const titles = getSceneTitlesFromStoredContent(child.contentBase64 || '');
+            headings.push(...titles);
+          } else if (child.type === 'folder') {
+            walk(child);
+          }
         }
-      }
-    };
-    walk(project.rootScriptFolder);
-    return Array.from(new Set(headings)); 
+      };
+      walk(project.rootScriptFolder);
+      return Array.from(new Set(headings)); 
+    } catch (e) {
+      Logger.error('Inspector', `allAvailableHeadings derivation failed: ${e}`);
+      return [];
+    }
   }, [project]);
 
   const panelScriptContext = useMemo(() => {
-    if (!project || !activeScene || !activeScene.linkedScriptNodeId) return null;
-    
-    const scIdx = project.scenes?.findIndex(s => s.id === activeScene.id) ?? -1;
-    
-    return getSceneScriptContext(
-      project,
-      activeScene.linkedScriptNodeId,
-      scIdx,
-      activeScene.id,
-      activeScene.panels?.map((p) => p.id) || [],
-    );
+    try {
+      if (!project || !activeScene || !activeScene.linkedScriptNodeId || !project.scenes) return null;
+      const scIdx = project.scenes.findIndex(s => s.id === activeScene.id);
+      const panelIds = activeScene.panels ? activeScene.panels.map((p) => p.id) : [];
+      
+      return getSceneScriptContext(
+        project,
+        activeScene.linkedScriptNodeId,
+        scIdx > -1 ? scIdx : 0,
+        activeScene.id,
+        panelIds,
+      );
+    } catch (e) {
+      Logger.error('Inspector', `panelScriptContext derivation failed: ${e}`);
+      return null;
+    }
   }, [project, activeScene]);
 
-  const displayBlocks = useMemo(
-    () => (panelScriptContext ? trimBlocksForDisplay(panelScriptContext.blocks, 28) : []),
-    [panelScriptContext],
-  );
+  const displayBlocks = useMemo(() => {
+    return panelScriptContext && panelScriptContext.blocks ? trimBlocksForDisplay(panelScriptContext.blocks, 28) : [];
+  }, [panelScriptContext]);
 
   if (!project) return <div className="p-4 text-neutral-500">No project loaded.</div>;
   if (!activePanelId && !activeSceneId) return <div className="flex h-full items-center justify-center p-4 text-neutral-500 text-sm italic">Select a scene or panel to inspect.</div>;
@@ -107,10 +138,14 @@ export const Inspector = () => {
   return (
     <div className="flex flex-col h-full bg-neutral-900 text-neutral-200 overflow-y-auto custom-scrollbar">
       
-      {/* --- TOP HALF: PANEL TIMING --- */}
       {activePanelId && activePanel && (
         <div className="border-b border-neutral-800 p-4 shrink-0">
-          <h3 className="mb-2 font-bold text-neutral-100">Panel timing</h3>
+          <h3 className="mb-2 font-bold text-neutral-100 flex items-center gap-1.5">
+            Panel timing
+            <span title="Controls how long this panel displays and transitions during animatic playback." className="flex items-center cursor-help">
+              <HelpCircle size={14} className="text-neutral-500 hover:text-neutral-300 transition-colors" />
+            </span>
+          </h3>
           <label className="mb-2 block text-xs text-neutral-400">
             Duration (ms)
             <input
@@ -201,7 +236,6 @@ export const Inspector = () => {
         </div>
       )}
 
-      {/* --- KEYFRAMES --- */}
       {activePanelId && (camKfAtPlayhead || layerKfAtPlayhead) && (
         <div className="border-b border-neutral-800 p-4 shrink-0">
           <h3 className="mb-1 font-bold text-neutral-100">Keyframes at playhead</h3>
@@ -254,10 +288,8 @@ export const Inspector = () => {
         </div>
       )}
 
-      {/* --- BOTTOM HALF: SCRIPT CONTEXT & CAPTIONS --- */}
       <div className="flex-1 flex flex-col p-4 bg-neutral-950 min-h-0">
         
-        {/* STATE A: SCENE SELECTED */}
         {activeSceneId && !activePanelId && activeScene && (
           <div className="flex flex-col h-full gap-4">
             <div className="shrink-0">
@@ -291,13 +323,13 @@ export const Inspector = () => {
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
-                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-950/30 border border-emerald-900/50 rounded flex-1">
-                    <LinkIcon size={14} className="text-emerald-500" />
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-950/30 border border-emerald-900/50 rounded flex-1 min-w-0">
+                    <LinkIcon size={14} className="text-emerald-500 shrink-0" />
                     <span className="text-xs font-mono text-emerald-400 truncate">{activeScene.linkedScriptNodeId}</span>
                   </div>
                   <button 
                     onClick={() => { commitHistory(); linkSceneToScript(activeScene.id, undefined); }}
-                    className="p-1.5 hover:bg-red-950/50 rounded border border-transparent hover:border-red-900/50 text-neutral-500 hover:text-red-400 transition-colors"
+                    className="p-1.5 shrink-0 hover:bg-red-950/50 rounded border border-transparent hover:border-red-900/50 text-neutral-500 hover:text-red-400 transition-colors"
                     title="Unlink Script Scene"
                   >
                     <X size={16} />
@@ -330,7 +362,10 @@ export const Inspector = () => {
                   <button
                     type="button"
                     className="w-full shrink-0 flex items-center justify-center gap-2 rounded bg-sky-600 hover:bg-sky-500 py-2.5 text-sm font-medium text-white transition-colors shadow-lg"
-                    onClick={() => setActiveScriptPageId(panelScriptContext.sourcePageId)}
+                    onClick={() => {
+                      setActiveScriptPageId(panelScriptContext.sourcePageId);
+                      window.dispatchEvent(new CustomEvent('app:select-tab', { detail: { tabId: 'tab-script' } }));
+                    }}
                   >
                     <ExternalLink size={16} />
                     Go to Script
@@ -341,15 +376,14 @@ export const Inspector = () => {
           </div>
         )}
 
-        {/* STATE B: PANEL SELECTED */}
         {activePanelId && activePanel && (
           <div className="flex flex-col h-full gap-4">
             
             {activeScene?.linkedScriptNodeId && panelScriptContext && (
               <div className="shrink-0 flex flex-col gap-1.5">
                 <div className="flex items-center justify-between px-1">
-                  <div className="flex items-center gap-1.5">
-                    <LinkIcon size={10} className="text-emerald-500" />
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <LinkIcon size={10} className="text-emerald-500 shrink-0" />
                     <span className="text-[10px] font-mono text-emerald-400 truncate tracking-wide">{activeScene.linkedScriptNodeId}</span>
                   </div>
                 </div>
@@ -364,6 +398,18 @@ export const Inspector = () => {
                       ))
                     )}
                 </div>
+                
+                <button
+                  type="button"
+                  className="w-full flex items-center justify-center gap-1.5 rounded border border-neutral-700 bg-neutral-800/50 py-1.5 text-[11px] font-medium text-sky-300 transition-colors hover:border-sky-500 hover:bg-neutral-800"
+                  onClick={() => {
+                    setActiveScriptPageId(panelScriptContext.sourcePageId);
+                    window.dispatchEvent(new CustomEvent('app:select-tab', { detail: { tabId: 'tab-script' } }));
+                  }}
+                >
+                  <ExternalLink size={12} />
+                  Go to Script
+                </button>
               </div>
             )}
 

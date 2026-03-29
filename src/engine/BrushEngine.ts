@@ -1,6 +1,17 @@
 import type { BrushConfig, Stroke } from '@common/models';
 import { getStroke } from 'perfect-freehand';
 
+// Mulberry32 PRNG for deterministic brush scattering/rotation
+export function createPRNG(seed: number) {
+  let a = seed;
+  return function() {
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  }
+}
+
 class TextureCache {
   private textures: Map<string, HTMLImageElement> = new Map();
   private tintedCache: Map<string, HTMLCanvasElement> = new Map(); // Key: `${brushId}_${color}`
@@ -17,17 +28,18 @@ class TextureCache {
     const ctx = canvas.getContext('2d');
     if (!ctx) return null;
     
-    // Fill background with a very light version of the color or transparent
     ctx.clearRect(0, 0, 64, 64);
-    
-    // Draw noise
     ctx.fillStyle = color;
+    
+    // Seeded Noise Pattern so background texture never shifts
+    const rng = createPRNG(4815162342); 
+    
     for (let i = 0; i < 2000; i++) {
-      const x = Math.random() * 64;
-      const y = Math.random() * 64;
-      ctx.globalAlpha = Math.random() * 0.5 + 0.1;
+      const x = rng() * 64;
+      const y = rng() * 64;
+      ctx.globalAlpha = rng() * 0.5 + 0.1;
       ctx.fillRect(x, y, 1, 1);
-      if (Math.random() > 0.8) {
+      if (rng() > 0.8) {
          ctx.fillRect(x, y, 2, 2);
       }
     }
@@ -59,12 +71,10 @@ class TextureCache {
     if (this.textures.has(id)) {
       return this.textures.get(id)!;
     }
-    // Fire off async load, return null for now
     this.getTexture(base64, id).catch(console.error);
     return null;
   }
 
-  // Cache to track if an image has alpha transparency
   private hasAlphaCache = new Map<string, boolean>();
 
   public getTintedTexture(img: HTMLImageElement, color: string, id: string): HTMLCanvasElement {
@@ -79,15 +89,11 @@ class TextureCache {
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return canvas;
 
-    // Draw the image first
     ctx.drawImage(img, 0, 0);
 
-    // Some PNGs might have white backgrounds instead of transparent backgrounds.
-    // Let's do a manual pixel manipulation to convert brightness to alpha, and apply the color.
     const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
     const data = imgData.data;
     
-    // Check if the image has any transparent pixels (cached)
     let hasAlpha = this.hasAlphaCache.get(id);
     if (hasAlpha === undefined) {
       hasAlpha = false;
@@ -100,7 +106,6 @@ class TextureCache {
       this.hasAlphaCache.set(id, hasAlpha);
     }
     
-    // Parse target color
     let targetR = 255, targetG = 255, targetB = 255;
     if (color.startsWith('#')) {
       const hex = color.substring(1);
@@ -122,16 +127,12 @@ class TextureCache {
       const a = data[i+3];
       
       const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
-      
       let finalAlpha = a;
       
       if (!hasAlpha) {
-        // If the image is fully opaque, we assume it's black ink on white background.
-        // Darker pixels become more opaque, lighter pixels become more transparent
         finalAlpha = 255 - brightness;
       }
       
-      // Always overwrite RGB to our target color so the brush is correctly tinted
       data[i] = targetR;
       data[i+1] = targetG;
       data[i+2] = targetB;
@@ -166,6 +167,10 @@ export const computeBrushStamps = (stroke: Stroke, config: BrushConfig): StampDa
   const baseSize = stroke.width;
   const actualMinSizeMultiplier = stroke.tool === 'eraser' ? 1.0 : (config.pressureSize ? 0.1 : 1.0);
 
+  // Extract seed from stroke or fallback, feed into deterministic PRNG
+  const strokeSeed = stroke.seed ?? 123456789;
+  const rng = createPRNG(strokeSeed);
+
   const addStamp = (x: number, y: number, p: number, angle: number) => {
     let size = baseSize;
     if (config.pressureSize) {
@@ -176,15 +181,16 @@ export const computeBrushStamps = (stroke: Stroke, config: BrushConfig): StampDa
       alpha = config.flow * p;
     }
     
+    // Use RNG to lock the mathematical scatter and rotation pattern
     if (config.scatter > 0) {
       const scatterAmount = size * config.scatter;
-      x += (Math.random() - 0.5) * scatterAmount * 2;
-      y += (Math.random() - 0.5) * scatterAmount * 2;
+      x += (rng() - 0.5) * scatterAmount * 2;
+      y += (rng() - 0.5) * scatterAmount * 2;
     }
 
     let rot = config.rotationAngle;
     if (config.rotationMode === 'path') rot += angle;
-    else if (config.rotationMode === 'random') rot += Math.random() * Math.PI * 2;
+    else if (config.rotationMode === 'random') rot += rng() * Math.PI * 2;
 
     stamps.push({ x, y, p, angle: rot, size, alpha });
   };
@@ -271,7 +277,6 @@ export const renderBrushStrokeToContext = (
   }
   
   if (['line', 'rectangle', 'ellipse'].includes(stroke.tool)) {
-    // Basic shape rendering remains the same, ignoring brush textures for shapes for now
     if (pts.length < 6) return;
     const startX = pts[0];
     const startY = pts[1];
@@ -302,11 +307,8 @@ export const renderBrushStrokeToContext = (
     return;
   }
 
-  // Use the brush config saved on the stroke if available, otherwise fallback to the provided one.
-  // This ensures existing strokes retain their original brush properties (like pressure mapping).
   const actualConfig = stroke.brushConfig || brushConfig;
 
-  // If there's no custom texture, use perfect-freehand for beautiful smooth strokes
   if (!actualConfig.textureBase64) {
     const pfPts = [];
     for (let i = 0; i < stroke.points.length; i += 3) {
@@ -354,14 +356,10 @@ export const renderBrushStrokeToContext = (
 
   let brushImg: HTMLCanvasElement | null = null;
   if (actualConfig.textureBase64) {
-    // If it's not loaded synchronously, we must wait for it to load before we can bake it.
-    // However, this is a synchronous function. We should have preloaded it in the caller.
     const img = BrushTextureManager.getTextureSync(actualConfig.textureBase64, actualConfig.id);
     if (img) {
       brushImg = BrushTextureManager.getTintedTexture(img, stroke.tool === 'eraser' ? '#ffffff' : stroke.color, actualConfig.id);
     } else {
-      // If the image is missing, do not draw ugly circles. Just return or log.
-      // We will ensure the caller awaits the load.
       return;
     }
   }

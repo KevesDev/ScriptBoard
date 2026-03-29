@@ -22,7 +22,6 @@ import type { Panel, Scene } from '@common/models';
 import { setPanelIdOnDataTransfer } from '../lib/panelTimelineDnD';
 import { nativeConfirm } from '../lib/focusAfterNativeDialog';
 
-// --- CUSTOM DRAG IMAGE GENERATOR ---
 const createDragImage = () => {
   const canvas = document.createElement('canvas');
   canvas.width = 60;
@@ -49,7 +48,11 @@ const createDragImage = () => {
 
 const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: string, dragImg: HTMLImageElement | null }) => {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: panel.id });
-  const { removePanel, commitHistory, activePanelId, setActivePanelId } = useProjectStore();
+  
+  const activePanelId = useProjectStore(s => s.activePanelId);
+  const setActivePanelId = useProjectStore(s => s.setActivePanelId);
+  const removePanel = useProjectStore(s => s.removePanel);
+  const commitHistory = useProjectStore(s => s.commitHistory);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -66,12 +69,15 @@ const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: str
       className={`relative flex h-[90px] w-full flex-none overflow-hidden rounded border transition-colors group ${
         isActive ? 'border-blue-400 bg-blue-900' : 'border-neutral-700 bg-neutral-800 hover:border-blue-500'
       }`}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+        setActivePanelId(panel.id);
+      }}
     >
       <div
         {...listeners}
         className="flex w-6 shrink-0 cursor-grab flex-col items-center justify-center border-r border-neutral-600 bg-neutral-900/90 active:cursor-grabbing hover:bg-neutral-700"
         title="Drag to reorder panels"
-        onPointerDown={(e) => e.stopPropagation()}
       >
         <GripVertical size={14} className="text-neutral-500" />
       </div>
@@ -85,10 +91,6 @@ const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: str
           if (dragImg) {
             e.dataTransfer.setDragImage(dragImg, 30, 20);
           }
-        }}
-        onPointerDown={(e) => {
-          e.stopPropagation();
-          setActivePanelId(panel.id);
         }}
       >
         <div className="absolute inset-0 bg-white">
@@ -108,6 +110,7 @@ const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: str
         <div className="absolute top-0 right-0 p-1 opacity-0 transition-opacity group-hover:opacity-100">
           <button
             type="button"
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => {
               e.stopPropagation();
               void (async () => {
@@ -131,8 +134,13 @@ const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: str
 };
 
 const SortableScene = ({ scene, activePanelId, activeSceneId, dragImg }: { scene: Scene; activePanelId: string | null; activeSceneId: string | null; dragImg: HTMLImageElement | null }) => {
-  const { addPanel, removeScene, reorderPanels, commitHistory, setActiveSceneId } = useProjectStore();
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: scene.id });
+
+  const addPanel = useProjectStore(s => s.addPanel);
+  const removeScene = useProjectStore(s => s.removeScene);
+  const reorderPanels = useProjectStore(s => s.reorderPanels);
+  const commitHistory = useProjectStore(s => s.commitHistory);
+  const setActiveSceneId = useProjectStore(s => s.setActiveSceneId);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -189,7 +197,7 @@ const SortableScene = ({ scene, activePanelId, activeSceneId, dragImg }: { scene
     <div 
       ref={setNodeRef}
       style={style}
-      onClick={(e) => {
+      onPointerDown={(e) => {
         e.stopPropagation();
         setActiveSceneId(scene.id);
       }}
@@ -208,10 +216,16 @@ const SortableScene = ({ scene, activePanelId, activeSceneId, dragImg }: { scene
           <span className="font-bold text-sm select-none">{scene.name}</span>
         </div>
         <div className="flex gap-1">
-          <button onClick={handleAddPanel} className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white" title="Add Panel">
+          <button 
+            onPointerDown={(e) => e.stopPropagation()} 
+            onClick={handleAddPanel} 
+            className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white" 
+            title="Add Panel"
+          >
             <Plus size={14} />
           </button>
           <button 
+            onPointerDown={(e) => e.stopPropagation()} 
             onClick={(e) => {
               e.stopPropagation();
               void (async () => {
@@ -247,7 +261,14 @@ const SortableScene = ({ scene, activePanelId, activeSceneId, dragImg }: { scene
 };
 
 export const Outliner = () => {
-  const { project, addScene, reorderScenes, activePanelId, activeSceneId, commitHistory, setActiveSceneId } = useProjectStore();
+  const project = useProjectStore(s => s.project);
+  const activePanelId = useProjectStore(s => s.activePanelId);
+  const activeSceneId = useProjectStore(s => s.activeSceneId);
+  const addScene = useProjectStore(s => s.addScene);
+  const reorderScenes = useProjectStore(s => s.reorderScenes);
+  const commitHistory = useProjectStore(s => s.commitHistory);
+  const setActiveSceneId = useProjectStore(s => s.setActiveSceneId);
+  
   const dragImgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
@@ -302,7 +323,8 @@ export const Outliner = () => {
           <span>Storyboard Outliner</span>
         </div>
         <button 
-          onClick={(e) => { e.stopPropagation(); handleAddScene(); }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={handleAddScene}
           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm transition-colors"
         >
           <Plus size={16} /> Add Scene

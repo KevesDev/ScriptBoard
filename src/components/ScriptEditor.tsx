@@ -8,7 +8,7 @@ import Underline from '@tiptap/extension-underline';
 import { Plus, X } from 'lucide-react';
 import { useProjectStore } from '../store/projectStore';
 import { useAppStore } from '../store/appStore';
-import type { ScriptFolder, ScriptPage } from '@common/models';
+import type { ScriptPage } from '@common/models';
 
 import {
   SceneHeading,
@@ -53,6 +53,7 @@ export const ScriptEditor: React.FC = () => {
   paginationEnabledRef.current = scriptLayout === 'print';
   
   const lastSyncedContentRef = useRef<string | null>(null);
+  const lastSyncedEditorRef = useRef<any>(null);
   
   const paperRef = useRef<HTMLDivElement>(null);
   const [paperScrollHeight, setPaperScrollHeight] = useState(US_LETTER_PAGE_CSS_PX);
@@ -67,19 +68,20 @@ export const ScriptEditor: React.FC = () => {
     editingTabIdRef.current = editingTabId;
   }, [editingTabId]);
 
-  const [activeCommentId, setActiveCommentId] = React.useState<string | null>(null);
-  const [activeCommentData, setActiveCommentData] = React.useState<{id: string, text: string, author: string} | null>(null);
+  const [activeCommentId, setActiveCommentId] = useState<string | null>(null);
+  const [activeCommentData, setActiveCommentData] = useState<{id: string, text: string, author: string} | null>(null);
 
   const pendingCardNavRef = useRef<{ pageId: string; sceneIndex: number } | null>(null);
   const commentSidebarFocusRef = useRef(false);
   const commentSidebarBlurTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [rightSidebarWidth, setRightSidebarWidth] = React.useState(() => {
+  const [rightSidebarWidth, setRightSidebarWidth] = useState(() => {
     if (typeof window === 'undefined') return 320;
     const v = window.localStorage.getItem('scriptboard.scriptSidebarWidth');
     const n = v ? parseInt(v, 10) : 320;
     return Number.isFinite(n) ? Math.min(640, Math.max(200, n)) : 320;
   });
+  
   const sidebarResizeRef = useRef<{ startX: number; startW: number } | null>(null);
   const latestSidebarWidthRef = useRef(rightSidebarWidth);
   latestSidebarWidthRef.current = rightSidebarWidth;
@@ -111,21 +113,21 @@ export const ScriptEditor: React.FC = () => {
     [rightSidebarWidth, onSidebarResizeMove, onSidebarResizeUp]
   );
 
-  const getAllPages = (): ScriptPage[] => {
-    if (!project) return [];
+  const allPages = useMemo(() => {
+    if (!project || !project.rootScriptFolder) return [];
     let pages: ScriptPage[] = [];
-    const traverse = (folder: ScriptFolder) => {
-      folder.children.forEach(c => {
-        if (c.type === 'page') pages.push(c as ScriptPage);
-        else traverse(c as ScriptFolder);
+    const traverse = (folder: any) => {
+      if (!folder || !folder.children) return;
+      folder.children.forEach((c: any) => {
+        if (c.type === 'page') pages.push(c);
+        else if (c.type === 'folder') traverse(c);
       });
     };
     traverse(project.rootScriptFolder);
     return pages;
-  };
-  const allPages = getAllPages();
+  }, [project]);
 
-  const [outlineItems, setOutlineItems] = React.useState<{id: string, title: string, pos: number}[]>([]);
+  const [outlineItems, setOutlineItems] = useState<{id: string, title: string, pos: number}[]>([]);
 
   const isUpdatingRef = useRef(false);
   const loadingPageContentRef = useRef(false);
@@ -145,7 +147,7 @@ export const ScriptEditor: React.FC = () => {
         if (!cap) return false;
         return handleScreenplayAutoCapitalize(view, from, to, text);
       },
-      handleClickOn: (_view: unknown, _pos: number, node: any, _nodePos: number, _event: unknown, _direct: boolean) => {
+      handleClickOn: (_view: unknown, _pos: number, node: any) => {
         if (node.marks) {
           const linkMark = node.marks.find((m: any) => m.type.name === 'link');
           if (linkMark) {
@@ -165,9 +167,7 @@ export const ScriptEditor: React.FC = () => {
   const scriptEditorExtensions = useMemo(
     () => [
       Action,
-      StarterKit.configure({
-        listItem: false, 
-      }),
+      StarterKit.configure({ listItem: false }),
       CustomListItem,    
       Underline,
       TextStyle,
@@ -208,7 +208,7 @@ export const ScriptEditor: React.FC = () => {
     [],
   );
 
-  const updateOutline = (editorInstance: any) => {
+  const updateOutline = useCallback((editorInstance: any) => {
     if (!editorInstance) return;
     const items: {id: string, title: string, pos: number}[] = [];
     editorInstance.state.doc.descendants((node: any, pos: number) => {
@@ -217,40 +217,38 @@ export const ScriptEditor: React.FC = () => {
       }
     });
     setOutlineItems(items);
-  };
+  }, []);
 
-  const editor = useEditor(
-    {
+  const editor = useEditor({
     extensions: scriptEditorExtensions,
     content: '<p class="action"></p>',
     editable: true,
     editorProps: scriptEditorProps,
-    onUpdate: ({ editor }) => {
+    onUpdate: ({ editor: ed }) => {
       if (loadingPageContentRef.current) return;
       const pageId = activeScriptPageIdRef.current;
       if (!pageId) return;
 
       isUpdatingRef.current = true;
       try {
-        const json = editor.getJSON();
+        const json = ed.getJSON();
         const b64 = utf8TextToBase64(JSON.stringify(json));
-        
         lastSyncedContentRef.current = b64;
         updateScriptPageContent(pageId, b64);
       } catch (err) {
-        console.error('Failed to persist script page (e.g. encoding)', err);
+        console.error('Failed to persist script page', err);
       } finally {
         isUpdatingRef.current = false;
       }
-      updateOutline(editor);
+      updateOutline(ed);
     },
-    onSelectionUpdate: ({ editor }) => {
+    onSelectionUpdate: ({ editor: ed }) => {
       if (commentSidebarFocusRef.current) return;
 
       try {
         let foundComment = false;
-        if (editor.isActive('comment')) {
-          const a = editor.getAttributes('comment');
+        if (ed.isActive('comment')) {
+          const a = ed.getAttributes('comment');
           if (a.commentId) {
             setActiveCommentId(a.commentId);
             setActiveCommentData({ id: a.commentId, text: a.text ?? '', author: a.author ?? '' });
@@ -259,7 +257,7 @@ export const ScriptEditor: React.FC = () => {
           }
         }
         if (!foundComment) {
-          const { state } = editor;
+          const { state } = ed;
           const { $from, $to } = state.selection;
           const from = Math.min($from.pos, $to.pos);
           const to = Math.max($from.pos, $to.pos);
@@ -268,7 +266,11 @@ export const ScriptEditor: React.FC = () => {
               const commentMark = node.marks.find((m) => m.type.name === 'comment');
               if (commentMark) {
                 setActiveCommentId(commentMark.attrs.commentId);
-                setActiveCommentData({ id: commentMark.attrs.commentId, text: commentMark.attrs.text, author: commentMark.attrs.author });
+                setActiveCommentData({ 
+                  id: commentMark.attrs.commentId, 
+                  text: commentMark.attrs.text, 
+                  author: commentMark.attrs.author 
+                });
                 setActiveRightTab('comments');
                 foundComment = true;
                 return false;
@@ -283,9 +285,7 @@ export const ScriptEditor: React.FC = () => {
       } catch { /* transient invalid state */ }
     },
     onBlur: () => {},
-  },
-    [project?.id ?? '__no_project__'],
-  );
+  }, [project?.id ?? '__no_project__']);
 
   useEffect(() => {
     editorRef.current = editor;
@@ -341,25 +341,28 @@ export const ScriptEditor: React.FC = () => {
     return () => window.removeEventListener(AFTER_NATIVE_DIALOG_EVENT, fixEditable);
   }, []);
 
-  // SYNC EFFECT: Monitors the project store and pushes external changes to editor
+  // SYNC EFFECT
   useEffect(() => {
-    if (!editor || !project) return;
+    if (!editor || !project || !project.rootScriptFolder) return;
 
     let storeBase64 = '';
-    const findPage = (folder: ScriptFolder) => {
+    const findPage = (folder: any) => {
+      if (!folder || !folder.children) return false;
       for (const child of folder.children) {
         if (child.type === 'page' && child.id === activeScriptPageId) {
           storeBase64 = child.contentBase64 || '';
           return true;
         } else if (child.type === 'folder') {
-          if (findPage(child as ScriptFolder)) return true;
+          if (findPage(child)) return true;
         }
       }
       return false;
     };
     if (activeScriptPageId) findPage(project.rootScriptFolder);
 
-    if (storeBase64 !== lastSyncedContentRef.current) {
+    const isNewEditorInstance = lastSyncedEditorRef.current !== editor;
+
+    if (storeBase64 !== lastSyncedContentRef.current || isNewEditorInstance) {
       loadingPageContentRef.current = true;
       try {
         const decoded = base64ToUtf8Text(storeBase64);
@@ -368,12 +371,18 @@ export const ScriptEditor: React.FC = () => {
           contentToSet = JSON.parse(decoded);
         } catch { /* use raw string */ }
 
-        editor.commands.setContent(contentToSet);
-        
-        // Wiping Tiptap history so Ctrl+Z doesn't undo the project load!
-        editor.commands.clearHistory(); 
+        try {
+          editor.chain().setContent(contentToSet).setMeta('addToHistory', false).run();
+        } catch (chainErr) {
+          editor.commands.setContent(contentToSet);
+        }
+
+        if (typeof (editor.commands as any).clearHistory === 'function') {
+          (editor.commands as any).clearHistory();
+        }
         
         lastSyncedContentRef.current = storeBase64;
+        lastSyncedEditorRef.current = editor;
         updateOutline(editor);
       } finally {
         loadingPageContentRef.current = false;
@@ -393,7 +402,7 @@ export const ScriptEditor: React.FC = () => {
       };
       requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(runFocus, 0)));
     }
-  }, [activeScriptPageId, editor, project, scriptLayout]); 
+  }, [activeScriptPageId, editor, project, scriptLayout, updateOutline]); 
 
   useEffect(() => {
     if (scriptLayout !== 'print') setPrintGutterMarkers([]);
@@ -437,7 +446,7 @@ export const ScriptEditor: React.FC = () => {
   if (!project) return <div className="p-4 text-neutral-500 bg-[#151515] h-full">No project loaded.</div>;
 
   const handleNewPage = () => {
-     const docsFolder = project.rootScriptFolder.children.find(c => c.type === 'folder' && c.name === 'Documents');
+     const docsFolder = project.rootScriptFolder.children.find((c: any) => c.type === 'folder' && c.name === 'Documents');
      const targetId = docsFolder ? docsFolder.id : project.rootScriptFolder.id;
      addPageToFolder(targetId, `Script ${allPages.length + 1}`);
   };
@@ -469,13 +478,17 @@ export const ScriptEditor: React.FC = () => {
       style={scriptPaperStyle}
       onPointerDownCapture={(e) => {
         const a = (e.target as HTMLElement).closest('a');
-        if (a?.getAttribute('href')?.startsWith('script-')) { e.preventDefault(); e.stopPropagation(); }
+        if (a?.getAttribute('href')?.startsWith('script-')) { 
+          e.preventDefault(); 
+          e.stopPropagation(); 
+        }
       }}
       onClickCapture={(e) => {
         const a = (e.target as HTMLElement).closest('a');
         const raw = a?.getAttribute('href') || '';
         if (!raw.startsWith('script-')) return;
-        e.preventDefault(); e.stopPropagation();
+        e.preventDefault(); 
+        e.stopPropagation();
         navigateInternalScriptHrefRef.current(raw);
       }}
     >
@@ -488,19 +501,45 @@ export const ScriptEditor: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e] text-neutral-200 overflow-hidden font-sans">
+      
+      {preferences.scriptSettings?.showPageBreaks === false && (
+        <style>{`
+          .screenplay-editor .script-page-break-decorator {
+            opacity: 0 !important;
+            pointer-events: none !important;
+          }
+        `}</style>
+      )}
+
       <div className="flex items-center bg-[#282828] border-b border-black overflow-x-auto shrink-0 select-none group">
         {allPages.map(page => (
           <div 
             key={page.id} 
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setActiveScriptPageId(page.id)}
-            className={`px-4 py-2 text-[13px] font-medium cursor-pointer border-r border-black flex items-center gap-2 transition-colors relative group/tab ${activeScriptPageId === page.id ? 'bg-[#323232] text-white border-t-2 border-t-blue-500' : 'bg-[#282828] text-neutral-400 hover:bg-[#323232] border-t-2 border-t-transparent'}`}
+            className={`px-4 py-2 text-[13px] font-medium cursor-pointer border-r border-black flex items-center gap-2 transition-colors relative group/tab ${
+              activeScriptPageId === page.id 
+                ? 'bg-[#323232] text-white border-t-2 border-t-blue-500' 
+                : 'bg-[#282828] text-neutral-400 hover:bg-[#323232] border-t-2 border-t-transparent'
+            }`}
           >
             <span className="whitespace-nowrap select-none">{page.name}</span>
-            <button onClick={(e) => { e.stopPropagation(); void handleDeleteScriptPage(page); }} className={`p-0.5 rounded hover:bg-black/30 hover:text-red-400 ml-1 ${activeScriptPageId === page.id ? 'opacity-100' : 'opacity-0 group-hover/tab:opacity-100'}`} title="Close/Delete Page"><X size={14}/></button>
+            <button 
+              onClick={(e) => { e.stopPropagation(); void handleDeleteScriptPage(page); }} 
+              className={`p-0.5 rounded hover:bg-black/30 hover:text-red-400 ml-1 ${activeScriptPageId === page.id ? 'opacity-100' : 'opacity-0 group-hover/tab:opacity-100'}`} 
+              title="Close/Delete Page"
+            >
+              <X size={14}/>
+            </button>
           </div>
         ))}
-        <button onClick={handleNewPage} className="p-2 ml-1 text-neutral-400 hover:text-white hover:bg-[#323232] rounded" title="New Script Document"><Plus size={16} /></button>
+        <button 
+          onClick={handleNewPage} 
+          className="p-2 ml-1 text-neutral-400 hover:text-white hover:bg-[#323232] rounded" 
+          title="New Script Document"
+        >
+          <Plus size={16} />
+        </button>
       </div>
 
       <ScriptMenuBar 
@@ -523,7 +562,11 @@ export const ScriptEditor: React.FC = () => {
         <ScriptLeftToolbar editor={editor} />
         
         <div 
-          className={scriptLayout === 'print' ? 'flex-1 overflow-y-auto p-8 bg-zinc-600 border-l border-r border-black shadow-inner custom-scrollbar' : 'flex-1 overflow-y-auto p-12 bg-[#151515] border-l border-r border-black shadow-inner custom-scrollbar'}
+          className={
+            scriptLayout === 'print' 
+              ? 'flex-1 overflow-y-auto p-8 bg-zinc-600 border-l border-r border-black shadow-inner custom-scrollbar' 
+              : 'flex-1 overflow-y-auto p-12 bg-[#151515] border-l border-r border-black shadow-inner custom-scrollbar'
+          }
           onMouseDown={(e) => {
             const el = e.target as HTMLElement;
             if (el.closest('.ProseMirror, [contenteditable="true"]')) return;
@@ -538,7 +581,8 @@ export const ScriptEditor: React.FC = () => {
           onKeyDownCapture={(e) => {
             if (e.key === 'Backspace' || e.key === 'Delete') return;
             const prefs = preferences.shortcuts;
-            let val = e.key.toLowerCase(); if (val === ' ') val = 'space';
+            let val = e.key.toLowerCase(); 
+            if (val === ' ') val = 'space';
             const modifiers = [];
             if (e.ctrlKey || e.metaKey) modifiers.push('ctrl');
             if (e.shiftKey) modifiers.push('shift');
@@ -557,7 +601,13 @@ export const ScriptEditor: React.FC = () => {
             <div className="mx-auto flex w-full max-w-[calc(8.5in+3.5rem)] items-start justify-center gap-2 sm:gap-3">
               <div className="relative w-9 shrink-0 select-none sm:w-11" style={{ height: paperScrollHeight }}>
                 {printGutterMarkers.map(({ num, top }) => (
-                  <span key={num} className="absolute right-0 text-[1.65rem] font-light leading-none tracking-tight text-zinc-300 sm:text-3xl" style={{ top: `${top}px`, transform: 'translateY(-50%)' }}>{num}</span>
+                  <span 
+                    key={num} 
+                    className="absolute right-0 text-[1.65rem] font-light leading-none tracking-tight text-zinc-300 sm:text-3xl" 
+                    style={{ top: `${top}px`, transform: 'translateY(-50%)' }}
+                  >
+                    {num}
+                  </span>
                 ))}
               </div>
               {scriptPaperEl}
@@ -568,50 +618,231 @@ export const ScriptEditor: React.FC = () => {
         </div>
 
         <div className="flex shrink-0 z-10 font-sans shadow-xl" style={{ width: rightSidebarWidth }}>
-          <div role="separator" aria-label="Resize script sidebar" onPointerDown={beginSidebarResize} className="w-1.5 shrink-0 cursor-col-resize hover:bg-blue-500/35 active:bg-blue-500/55 border-l border-black" />
+          <div 
+            role="separator" 
+            aria-label="Resize script sidebar" 
+            onPointerDown={beginSidebarResize} 
+            className="w-1.5 shrink-0 cursor-col-resize hover:bg-blue-500/35 active:bg-blue-500/55 border-l border-black" 
+          />
           <div className="flex min-w-0 flex-1 flex-col bg-[#323232] border-l border-black">
            <div className="flex shrink-0 overflow-x-auto overflow-y-hidden text-[11px] font-semibold text-[#9ca3af] border-b border-black bg-[#282828] tracking-wider uppercase">
              {['documents', 'outline', 'info', 'notes', 'comments'].map(tab => (
-               <div key={tab} onClick={() => setActiveRightTab(tab as any)} className={`shrink-0 px-3 py-3 border-b-2 cursor-pointer transition-colors ${activeRightTab === tab ? 'border-blue-500 text-white' : 'border-transparent hover:text-white hover:bg-[#323232]'}`}>{tab.charAt(0).toUpperCase() + tab.slice(1, 4)}</div>
+               <div 
+                 key={tab} 
+                 onClick={() => setActiveRightTab(tab as any)} 
+                 className={`shrink-0 px-3 py-3 border-b-2 cursor-pointer transition-colors ${
+                   activeRightTab === tab 
+                     ? 'border-blue-500 text-white' 
+                     : 'border-transparent hover:text-white hover:bg-[#323232]'
+                 }`}
+               >
+                 {tab.charAt(0).toUpperCase() + tab.slice(1, 4)}
+               </div>
              ))}
            </div>
            
            <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 bg-[#323232] custom-scrollbar">
+              
               {activeRightTab === 'documents' && (
                 <div className="flex flex-col gap-2 h-full text-sm">
-                  <div className="flex justify-between items-center mb-2"><h3 className="font-bold text-white text-xs uppercase tracking-wider">Project Documents</h3><button onClick={handleNewPage} className="text-neutral-400 hover:text-white p-1 rounded hover:bg-neutral-700 bg-black/20"><Plus size={14} /></button></div>
+                  <div className="flex justify-between items-center mb-2">
+                    <h3 className="font-bold text-white text-xs uppercase tracking-wider">Project Documents</h3>
+                    <button 
+                      onClick={handleNewPage} 
+                      className="text-neutral-400 hover:text-white p-1 rounded hover:bg-neutral-700 bg-black/20"
+                    >
+                      <Plus size={14} />
+                    </button>
+                  </div>
                   <div className="flex flex-col gap-1.5">
                     {allPages.map(page => (
-                      <div key={page.id} className={`flex items-center justify-between p-2 rounded cursor-pointer border transition-colors group/item ${activeScriptPageId === page.id ? 'bg-[#3b82f6] border-blue-400 text-white' : 'bg-[#282828] border-black text-neutral-400 hover:bg-[#333]'}`} onClick={() => setActiveScriptPageId(page.id)}>
-                        <div className="flex-1 min-w-0">{editingTabId === page.id ? (
-                            <input autoFocus ref={(el) => { if (el && document.activeElement !== el) setTimeout(() => { el.focus(); el.select(); }, 50); }} maxLength={30} value={editingTabName} onChange={e => setEditingTabName(e.target.value)} onBlur={() => { if (editingTabName.trim() !== '' && editingTabName.trim() !== page.name) updateNodeName(page.id, editingTabName.trim()); setEditingTabId(null); }} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); else if (e.key === 'Escape') setEditingTabId(null); }} className="bg-[#151515] text-white px-1 outline-none w-full rounded border border-blue-500" onMouseDown={e => e.stopPropagation()} />
+                      <div 
+                        key={page.id} 
+                        className={`flex items-center justify-between p-2 rounded cursor-pointer border transition-colors group/item ${
+                          activeScriptPageId === page.id 
+                            ? 'bg-[#3b82f6] border-blue-400 text-white' 
+                            : 'bg-[#282828] border-black text-neutral-400 hover:bg-[#333]'
+                        }`} 
+                        onClick={() => setActiveScriptPageId(page.id)}
+                      >
+                        <div className="flex-1 min-w-0">
+                          {editingTabId === page.id ? (
+                            <input 
+                              autoFocus 
+                              ref={(el) => { 
+                                if (el && document.activeElement !== el) {
+                                  setTimeout(() => { el.focus(); el.select(); }, 50); 
+                                }
+                              }} 
+                              maxLength={30} 
+                              value={editingTabName} 
+                              onChange={e => setEditingTabName(e.target.value)} 
+                              onBlur={() => { 
+                                if (editingTabName.trim() !== '' && editingTabName.trim() !== page.name) {
+                                  updateNodeName(page.id, editingTabName.trim()); 
+                                }
+                                setEditingTabId(null); 
+                              }} 
+                              onKeyDown={e => { 
+                                e.stopPropagation(); 
+                                if (e.key === 'Enter') {
+                                  (e.target as HTMLInputElement).blur(); 
+                                } else if (e.key === 'Escape') {
+                                  setEditingTabId(null); 
+                                }
+                              }} 
+                              className="bg-[#151515] text-white px-1 outline-none w-full rounded border border-blue-500" 
+                              onMouseDown={e => e.stopPropagation()} 
+                            />
                           ) : (
-                            <span className="truncate select-none cursor-text w-full" title="Double-click to rename" onDoubleClick={(e) => { e.preventDefault(); e.stopPropagation(); setEditingTabId(page.id); setEditingTabName(page.name); }}>{page.name}</span>
+                            <span 
+                              className="truncate select-none cursor-text w-full" 
+                              title="Double-click to rename" 
+                              onDoubleClick={(e) => { 
+                                e.preventDefault(); 
+                                e.stopPropagation(); 
+                                setEditingTabId(page.id); 
+                                setEditingTabName(page.name); 
+                              }}
+                            >
+                              {page.name}
+                            </span>
                           )}
                         </div>
-                        {editingTabId !== page.id && <button onClick={(e) => { e.stopPropagation(); void handleDeleteScriptPage(page); }} className="p-1 hover:bg-black/30 rounded text-neutral-500 hover:text-red-400 shrink-0 ml-2"><X size={12} /></button>}
+                        {editingTabId !== page.id && (
+                          <button 
+                            onClick={(e) => { e.stopPropagation(); void handleDeleteScriptPage(page); }} 
+                            className="p-1 hover:bg-black/30 rounded text-neutral-500 hover:text-red-400 shrink-0 ml-2"
+                          >
+                            <X size={12} />
+                          </button>
+                        )}
                       </div>
                     ))}
                   </div>
                 </div>
               )}
+
               {activeRightTab === 'outline' && outlineItems.map((item, index) => (
-                <div key={item.id} onClick={() => editor?.chain().focus().setTextSelection(item.pos).scrollIntoView().run()} className="bg-[#e2e8f0] p-4 rounded-sm shadow-md text-black flex flex-col gap-2 cursor-pointer hover:bg-white hover:-translate-y-0.5 transition-all border-t-8 border-[#9ca3af]">
-                  <div className="font-bold text-[11px] uppercase tracking-wide text-neutral-800 leading-tight"><span className="text-[#6b7280] mr-1">{index + 1}.</span> {item.title}</div>
+                <div 
+                  key={item.id} 
+                  onClick={() => editor?.chain().focus().setTextSelection(item.pos).scrollIntoView().run()} 
+                  className="bg-[#e2e8f0] p-4 rounded-sm shadow-md text-black flex flex-col gap-2 cursor-pointer hover:bg-white hover:-translate-y-0.5 transition-all border-t-8 border-[#9ca3af]"
+                >
+                  <div className="font-bold text-[11px] uppercase tracking-wide text-neutral-800 leading-tight">
+                    <span className="text-[#6b7280] mr-1">{index + 1}.</span> {item.title}
+                  </div>
                 </div>
               ))}
-              {activeRightTab === 'info' && <div className="bg-[#282828] p-3 rounded border border-black shadow-inner flex flex-col gap-2"><h3 className="font-bold text-white mb-2 text-xs uppercase tracking-wider">Project Info</h3><div><label className="text-xs text-neutral-500 block mb-1">Title</label><input type="text" className="w-full bg-[#151515] border border-black rounded p-1.5 text-white text-xs" value={project?.name || ''} onChange={(e) => updateProjectName(e.target.value)} /></div><div><label className="text-xs text-neutral-500 block mb-1">Author</label><input type="text" className="w-full bg-[#151515] border border-black rounded p-1.5 text-white text-xs" placeholder="Author Name" value={project?.settings?.author || ''} onChange={(e) => updateProjectSettings({ author: e.target.value })} /></div><div className="text-xs text-neutral-400">Scenes: {project?.scenes.length || 0}<br/>Pages: {allPages.length || 0}</div></div>}
-              {activeRightTab === 'notes' && <div className="flex flex-col gap-2 h-full text-sm"><h3 className="font-bold text-white text-xs uppercase tracking-wider">Global Scratchpad</h3><textarea value={project?.settings?.notes || ''} onChange={(e) => updateProjectSettings({ notes: e.target.value })} className="flex-1 w-full bg-[#282828] border border-black rounded p-3 text-neutral-300 text-sm resize-none focus:border-blue-500 custom-scrollbar" placeholder="Jot down quick ideas..." /></div>}
+
+              {activeRightTab === 'info' && (
+                <div className="bg-[#282828] p-3 rounded border border-black shadow-inner flex flex-col gap-2">
+                  <h3 className="font-bold text-white mb-2 text-xs uppercase tracking-wider">Project Info</h3>
+                  <div>
+                    <label className="text-xs text-neutral-500 block mb-1">Title</label>
+                    <input 
+                      type="text" 
+                      className="w-full bg-[#151515] border border-black rounded p-1.5 text-white text-xs" 
+                      value={project?.name || ''} 
+                      onChange={(e) => updateProjectName(e.target.value)} 
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs text-neutral-500 block mb-1">Author</label>
+                    <input 
+                      type="text" 
+                      className="w-full bg-[#151515] border border-black rounded p-1.5 text-white text-xs" 
+                      placeholder="Author Name" 
+                      value={project?.settings?.author || ''} 
+                      onChange={(e) => updateProjectSettings({ author: e.target.value })} 
+                    />
+                  </div>
+                  <div className="text-xs text-neutral-400">
+                    Scenes: {project?.scenes?.length || 0}<br/>
+                    Pages: {allPages.length || 0}
+                  </div>
+                </div>
+              )}
+
+              {activeRightTab === 'notes' && (
+                <div className="flex flex-col gap-2 h-full text-sm">
+                  <h3 className="font-bold text-white text-xs uppercase tracking-wider">Global Scratchpad</h3>
+                  <textarea 
+                    value={project?.settings?.notes || ''} 
+                    onChange={(e) => updateProjectSettings({ notes: e.target.value })} 
+                    className="flex-1 w-full bg-[#282828] border border-black rounded p-3 text-neutral-300 text-sm resize-none focus:outline-none focus:border-blue-500 custom-scrollbar" 
+                    placeholder="Jot down quick ideas..." 
+                  />
+                </div>
+              )}
+
               {activeRightTab === 'comments' && (
-                <div className="flex flex-col gap-2 h-full text-sm" onMouseDown={(e) => e.stopPropagation()} onFocusCapture={() => { if (commentSidebarBlurTimerRef.current) { clearTimeout(commentSidebarBlurTimerRef.current); commentSidebarBlurTimerRef.current = null; } commentSidebarFocusRef.current = true; }} onBlurCapture={() => { commentSidebarBlurTimerRef.current = setTimeout(() => { commentSidebarFocusRef.current = false; }, 200); }}>
+                <div 
+                  className="flex flex-col gap-2 h-full text-sm" 
+                  onMouseDown={(e) => e.stopPropagation()} 
+                  onFocusCapture={() => { 
+                    if (commentSidebarBlurTimerRef.current) { 
+                      clearTimeout(commentSidebarBlurTimerRef.current); 
+                      commentSidebarBlurTimerRef.current = null; 
+                    } 
+                    commentSidebarFocusRef.current = true; 
+                  }} 
+                  onBlurCapture={() => { 
+                    commentSidebarBlurTimerRef.current = setTimeout(() => { 
+                      commentSidebarFocusRef.current = false; 
+                    }, 200); 
+                  }}
+                >
                   <h3 className="font-bold text-white text-xs uppercase tracking-wider mb-2">Comment</h3>
                   {activeCommentData ? (
                     <div className="bg-[#282828] p-3 rounded border border-black shadow-inner flex flex-col gap-3">
-                      <div><div className="text-[10px] text-neutral-500 uppercase tracking-wide mb-1">Author</div><input type="text" value={activeCommentData.author} onChange={(e) => { const newAuthor = e.target.value; setActiveCommentData(prev => prev ? { ...prev, author: newAuthor } : null); if (editorRef.current && activeCommentId) applyCommentAttrsById(editorRef.current, activeCommentId, { author: newAuthor, timestamp: Date.now() }); }} className="w-full bg-[#151515] border border-black rounded p-1.5 text-white text-xs" /></div>
-                      <div><div className="text-[10px] text-neutral-500 uppercase tracking-wide mb-1">Note</div><textarea id="active-comment-textarea" value={activeCommentData.text} onChange={(e) => { const newText = e.target.value; setActiveCommentData(prev => prev ? { ...prev, text: newText } : null); if (editorRef.current && activeCommentId) applyCommentAttrsById(editorRef.current, activeCommentId, { text: newText, timestamp: Date.now() }); }} className="w-full h-32 bg-[#151515] border border-black rounded p-1.5 text-white text-xs resize-none custom-scrollbar focus:border-blue-500" /></div>
-                      <button onClick={() => { if (editor) { editor.chain().focus().unsetMark('comment').run(); setActiveCommentId(null); setActiveCommentData(null); setActiveRightTab('documents'); } }} className="w-full py-1.5 bg-red-900/50 hover:bg-red-800 text-red-200 text-xs rounded border border-red-900 transition-colors mt-2">Delete Comment</button>
+                      <div>
+                        <div className="text-[10px] text-neutral-500 uppercase tracking-wide mb-1">Author</div>
+                        <input 
+                          type="text" 
+                          value={activeCommentData.author} 
+                          onChange={(e) => { 
+                            const newAuthor = e.target.value; 
+                            setActiveCommentData(prev => prev ? { ...prev, author: newAuthor } : null); 
+                            if (editorRef.current && activeCommentId) {
+                              applyCommentAttrsById(editorRef.current, activeCommentId, { author: newAuthor, timestamp: Date.now() }); 
+                            }
+                          }} 
+                          className="w-full bg-[#151515] border border-black rounded p-1.5 text-white text-xs" 
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[10px] text-neutral-500 uppercase tracking-wide mb-1">Note</div>
+                        <textarea 
+                          id="active-comment-textarea" 
+                          value={activeCommentData.text} 
+                          onChange={(e) => { 
+                            const newText = e.target.value; 
+                            setActiveCommentData(prev => prev ? { ...prev, text: newText } : null); 
+                            if (editorRef.current && activeCommentId) {
+                              applyCommentAttrsById(editorRef.current, activeCommentId, { text: newText, timestamp: Date.now() }); 
+                            }
+                          }} 
+                          className="w-full h-32 bg-[#151515] border border-black rounded p-1.5 text-white text-xs resize-none custom-scrollbar focus:outline-none focus:border-blue-500" 
+                        />
+                      </div>
+                      <button 
+                        onClick={() => { 
+                          if (editor) { 
+                            editor.chain().focus().unsetMark('comment').run(); 
+                            setActiveCommentId(null); 
+                            setActiveCommentData(null); 
+                            setActiveRightTab('documents'); 
+                          } 
+                        }} 
+                        className="w-full py-1.5 bg-red-900/50 hover:bg-red-800 text-red-200 text-xs rounded border border-red-900 transition-colors mt-2"
+                      >
+                        Delete Comment
+                      </button>
                     </div>
-                  ) : ( <div className="text-neutral-500 text-xs text-center mt-10">Select text and click Comment to add notes.</div> )}
+                  ) : ( 
+                    <div className="text-neutral-500 text-xs text-center mt-10">Select text and click Comment to add notes.</div> 
+                  )}
                 </div>
               )}
            </div>

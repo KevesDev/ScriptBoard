@@ -18,6 +18,7 @@ import { PlotTreeEditor } from './components/PlotTree';
 import { useAppStore } from './store/appStore';
 import { nativeAlert, nativeConfirm } from './lib/focusAfterNativeDialog';
 import { GlobalShortcutManager } from './components/GlobalShortcutManager';
+import { Logger } from './lib/logger';
 
 class ComponentErrorBoundary extends React.Component<{children: React.ReactNode, name: string}, {hasError: boolean, error: Error | null}> {
   constructor(props: any) {
@@ -30,16 +31,29 @@ class ComponentErrorBoundary extends React.Component<{children: React.ReactNode,
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
-    console.error(`Error in ${this.props.name}:`, error, errorInfo);
+    Logger.error('ErrorBoundary', `Component crashed: ${this.props.name}`, error, errorInfo);
   }
 
   render() {
     if (this.state.hasError) {
       return (
-        <div className="h-full w-full bg-red-900 text-white p-4 overflow-auto font-mono text-xs">
-          <h2 className="text-lg font-bold mb-2">Component Crashed: {this.props.name}</h2>
-          <pre>{this.state.error?.toString()}</pre>
-          <pre className="mt-2 text-red-300">{this.state.error?.stack}</pre>
+        <div className="h-full w-full bg-neutral-950 text-neutral-300 p-6 flex flex-col items-center justify-center font-sans text-sm">
+          <div className="bg-neutral-900 border border-red-900 p-4 rounded-lg shadow-2xl max-w-lg w-full">
+            <h2 className="text-red-400 font-bold mb-2 flex items-center gap-2 uppercase tracking-wide text-xs">
+               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+               Component Crash: {this.props.name}
+            </h2>
+            <p className="text-neutral-400 mb-4 text-xs">An unexpected error occurred. The developer log has recorded the stack trace.</p>
+            <div className="bg-black/80 p-3 rounded overflow-auto max-h-32 text-[10px] font-mono text-red-300/80 custom-scrollbar">
+              {this.state.error?.toString()}
+            </div>
+            <button 
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="mt-4 px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 text-white rounded text-xs transition-colors"
+            >
+              Attempt Recovery
+            </button>
+          </div>
         </div>
       );
     }
@@ -180,6 +194,16 @@ function App() {
     }
   }, []);
 
+  // AAA FIX: Allows other components to trigger global tab switching
+  useEffect(() => {
+    const handleSelectTab = (e: Event) => {
+      const tabId = (e as CustomEvent).detail.tabId;
+      model.doAction(Actions.selectTab(tabId));
+    };
+    window.addEventListener('app:select-tab', handleSelectTab);
+    return () => window.removeEventListener('app:select-tab', handleSelectTab);
+  }, [model]);
+
   const handleFlexLayoutAction = (action: Action) => {
     if (action.type === Actions.SELECT_TAB) {
       if (action.data.tabNode === 'tab-script') {
@@ -302,7 +326,6 @@ function App() {
 
   const backupPromptedIdsRef = useRef<Set<string>>(new Set());
 
-  // AAA Auto-Save Reminder Logic
   const checkAndPromptUnsaved = useCallback(async (proj: Project) => {
     if (!window.ipcRenderer) return false;
     const q = await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_QUERY_SAVE_PATH, proj.id);
@@ -389,7 +412,7 @@ function App() {
                     default: return <div className="h-full bg-[#1e1e1e]">Not found</div>;
                   }
                 } catch (e) {
-                  console.error("Error rendering component:", subNode.getComponent(), e);
+                  Logger.error('Layout', 'Error rendering component', e);
                   return <div className="h-full bg-[#1e1e1e] p-4 text-red-500">Error rendering {subNode.getComponent()}</div>;
                 }
               }} 
@@ -417,7 +440,7 @@ function App() {
                     default: return <div className="h-full bg-[#1e1e1e]">Not found</div>;
                   }
                 } catch (e) {
-                  console.error("Error rendering component:", subNode.getComponent(), e);
+                  Logger.error('Layout', 'Error rendering component', e);
                   return <div className="h-full bg-[#1e1e1e] p-4 text-red-500">Error rendering {subNode.getComponent()}</div>;
                 }
               }} 
@@ -425,7 +448,7 @@ function App() {
           </div>
         );
       case 'inspector':
-        return <Inspector />;
+        return <ComponentErrorBoundary name="Inspector"><Inspector /></ComponentErrorBoundary>;
       default:
         return <div>Component not found</div>;
     }
