@@ -40,7 +40,7 @@ body {
 }
 
 /* * =========================================================
- * SCREENPLAY FORMATTING
+ * AAA SCREENPLAY FORMATTING & SPACING
  * =========================================================
  */
 .screenplay-editor,
@@ -54,7 +54,6 @@ body {
   font-size: inherit !important;
 }
 
-/* Base override to kill Tailwind's default prose margins */
 .screenplay-editor .prose p,
 .screenplay-editor .prose div {
   font-size: inherit !important;
@@ -62,7 +61,6 @@ body {
   padding: 0 !important;
 }
 
-/* Scene Headings: 2 blank lines before, 1 after */
 .screenplay-editor .prose .scene-heading {
   text-transform: uppercase;
   font-weight: bold;
@@ -70,9 +68,10 @@ body {
   margin-bottom: 1rem !important;
   margin-left: 0 !important;
   margin-right: 0 !important;
+  position: relative; /* REQUIRED FOR FOLDING CHEVRONS */
+  overflow: visible; 
 }
 
-/* Action: 1 blank line before, 1 after */
 .screenplay-editor .prose .action {
   margin-top: 1rem !important;
   margin-bottom: 1rem !important;
@@ -80,7 +79,6 @@ body {
   margin-right: 0 !important;
 }
 
-/* Character: 1 blank line before, 0 after. Indented 35% */
 .screenplay-editor .prose .character {
   text-transform: uppercase;
   margin-top: 1rem !important;
@@ -88,7 +86,6 @@ body {
   margin-left: 35% !important;
 }
 
-/* Parenthetical: 0 lines before, 0 after. Indented tightly under Character */
 .screenplay-editor .prose .parenthetical {
   margin-top: 0 !important;
   margin-bottom: 0 !important;
@@ -99,7 +96,6 @@ body {
   text-indent: 0 !important;
 }
 
-/* Dialogue: 0 lines before, 1 after. Indented 18% from both sides */
 .screenplay-editor .prose .dialogue {
   margin-top: 0 !important;
   margin-bottom: 1rem !important;
@@ -107,7 +103,6 @@ body {
   margin-right: 18% !important;
 }
 
-/* Transition: 1.5 lines before, 1.5 after. Flush right. */
 .screenplay-editor .prose .transition {
   text-transform: uppercase;
   text-align: right;
@@ -117,16 +112,52 @@ body {
   margin-right: 0 !important;
 }
 
-/* Prevent the very first line of a page from having a top margin so it aligns perfectly */
 .screenplay-editor .prose > *:first-child {
   margin-top: 0 !important;
+}
+
+/* * =========================================================
+ * SCENE FOLDING WIDGETS
+ * =========================================================
+ */
+.scene-fold-chevron {
+  position: absolute;
+  left: -1.75rem;
+  top: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  user-select: none;
+  color: transparent; /* Invisible by default */
+  font-size: 0.75rem;
+  font-family: sans-serif;
+  transition: color 0.2s ease;
+  z-index: 10;
+}
+
+/* Show chevron when folded, or when hovering over the scene heading */
+.scene-fold-chevron.folded,
+.screenplay-editor .prose .scene-heading:hover .scene-fold-chevron {
+  color: #9ca3af; 
+}
+
+.scene-fold-chevron:hover {
+  color: #3b82f6 !important; 
+}
+
+@media print {
+  .scene-fold-chevron {
+    display: none !important;
+  }
 }
 
 /* * =========================================================
  * STORYBOARD & CANVAS
  * =========================================================
  */
-/* Storyboard canvas: grid behind transparent WebGL so empty areas read as “no ink”, not white paper. */
 .sb-canvas-transparency-grid {
   background-color: #262626;
   background-image:
@@ -146,7 +177,6 @@ body {
  * UI UTILITIES
  * =========================================================
  */
-/* Custom Scrollbars */
 .custom-scrollbar::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -162,7 +192,6 @@ body {
   background: #777; 
 }
 
-/* Electron Window Controls */
 .drag-region {
   -webkit-app-region: drag;
 }

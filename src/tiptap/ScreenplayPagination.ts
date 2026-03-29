@@ -25,28 +25,35 @@ function domBlockHeight(view: EditorView, pos: number): number {
         el = el.parentElement;
       }
     } catch {
-      return 0;
+      return -1; // -1 specifically flags "not rendered yet"
     }
   }
-  if (!el || el.nodeType !== 1) return 0;
+  if (!el || el.nodeType !== 1) return -1;
+  
+  // AAA BUG FIX: Check if the element was explicitly hidden by the Folding Plugin
+  // This is lightning fast and prevents the 24px fallback loop on invisible scenes.
+  if (el.classList.contains('script-folded-node')) {
+    return 0; 
+  }
   
   const cs = window.getComputedStyle(el);
   const mb = parseFloat(cs.marginBottom) || 0;
-  return el.offsetHeight + mb;
+  const h = el.offsetHeight + mb;
+  
+  return h > 0 ? h : -1;
 }
 
 /**
- * Layout Engine: Calculates where page breaks SHOULD be visually 
+ * AAA Layout Engine: Calculates where page breaks SHOULD be visually 
  * rendered without ever modifying the underlying document data.
  */
 function calculatePagination(view: EditorView, pageBodyHeightPx: number): DecorationSet {
   const blocks: { pos: number; height: number; type: string }[] = [];
   
-  // 1. Map the heights of all root-level nodes
   view.state.doc.forEach((node, offset) => {
     const pos = offset; 
     let h = domBlockHeight(view, pos);
-    if (h <= 0) h = 24; // Fallback height if not fully rendered yet
+    if (h === -1) h = 24; // Fallback height ONLY if the node is unrendered, not folded
     blocks.push({ pos, height: h, type: node.type.name });
   });
 
@@ -54,13 +61,11 @@ function calculatePagination(view: EditorView, pageBodyHeightPx: number): Decora
   let used = 0;
   let pageNum = 1;
 
-  // 2. Iterate and apply Widow/Orphan formatting rules
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
     
     if (used + b.height > pageBodyHeightPx && used > 0) {
       
-      // Widow/Orphan Protection: Don't strand Character without their Dialogue!
       let breakIdx = i;
       if (b.type === 'dialogue' || b.type === 'parenthetical') {
         let j = i - 1;
@@ -70,19 +75,16 @@ function calculatePagination(view: EditorView, pageBodyHeightPx: number): Decora
         }
       }
 
-      // Safety: Never put a page break before the very first node!
       if (breakIdx === 0) breakIdx = 1;
 
       pageNum++;
       const breakPos = blocks[breakIdx].pos;
       
-      // 3. Generate the "Ghost" Page Break Decoration
       decos.push(Decoration.widget(breakPos, () => {
         const widget = document.createElement('div');
         widget.className = 'script-page-break-decorator';
-        widget.contentEditable = 'false'; // Prevents cursor from entering the gap
+        widget.contentEditable = 'false'; 
         
-        // Sleek, thin <hr> style break. Negative margins slice it cleanly across the padding.
         widget.style.cssText = `
           height: 2px;
           background-color: #d4d4d8; 
@@ -100,7 +102,6 @@ function calculatePagination(view: EditorView, pageBodyHeightPx: number): Decora
         return widget;
       }, { side: -1, key: `page-break-${pageNum}` }));
 
-      // 4. Reset 'used' vertical space to the height of the blocks we just shifted to the new page
       used = 0;
       for (let k = breakIdx; k <= i; k++) {
         used += blocks[k].height;
@@ -159,7 +160,6 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
             if (meta?.decos !== undefined) {
               return { decos: meta.decos, recalcId: value.recalcId };
             }
-            // Map decorations securely through document changes so they don't break while typing
             return { decos: value.decos.map(tr.mapping, tr.doc), recalcId: value.recalcId };
           }
         },
@@ -181,7 +181,6 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
               return;
             }
 
-            // Wait for DOM to finish rendering the user's latest keystroke
             requestAnimationFrame(() => {
               if (isDestroyed) return;
               const newDecos = calculatePagination(view, opts.pageBodyHeightPx);
@@ -191,7 +190,6 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
 
           const schedule = () => {
             if (debounceTimer) clearTimeout(debounceTimer);
-            // 300ms debounce ensures buttery smooth typing even on massive scripts
             debounceTimer = setTimeout(runLayoutEngine, 300); 
           };
 
@@ -206,8 +204,6 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
                 return;
               }
               
-              // Check if the document data changed during this exact transaction.
-              // If true, the user typed/pasted text, so we schedule the Layout Engine.
               if (prevState.doc !== updatedView.state.doc) {
                 schedule();
               }

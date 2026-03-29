@@ -5,26 +5,11 @@ import { TextStyle } from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
 import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
-import {
-  Bold,
-  Italic,
-  Underline as UnderlineIcon,
-  List,
-  ListOrdered,
-  Link as LinkIcon,
-  Image as ImageIcon,
-  User,
-  MessageSquare,
-  Parentheses,
-  ChevronsRight,
-  Clapperboard,
-  Plus,
-  X,
-  MessageCircle,
-} from 'lucide-react';
+import { Plus, X, PenLine } from 'lucide-react';
 import { useProjectStore } from '../store/projectStore';
 import { useAppStore } from '../store/appStore';
 import type { ScriptFolder, ScriptPage } from '@common/models';
+
 import {
   SceneHeading,
   Action,
@@ -39,7 +24,9 @@ import {
 } from '../tiptap/ScreenplayNodes';
 import { ScreenplayPagination } from '../tiptap/ScreenplayPagination';
 import { ScreenplayTabCycle } from '../tiptap/ScreenplayTabCycle';
+import { ScreenplayFolding } from '../tiptap/ScreenplayFolding';
 import { handleScreenplayAutoCapitalize, ScreenplaySentenceCapState } from '../lib/screenplayAutoCapitalize';
+
 import {
   AFTER_NATIVE_DIALOG_EVENT,
   nativeConfirm,
@@ -48,239 +35,15 @@ import {
 } from '../lib/focusAfterNativeDialog';
 import { base64ToUtf8Text, utf8TextToBase64 } from '../lib/scriptContentBase64';
 
-/** US Letter height in CSS px (96px per inch). */
-const US_LETTER_PAGE_CSS_PX = 96 * 11;
+import { 
+  US_LETTER_PAGE_CSS_PX, 
+  gutterMarkersFromPaper, 
+  findSceneHeadingDocumentPos, 
+  applyCommentAttrsById 
+} from '../lib/scriptEditorUtils';
 
-/** Fallback when no decorations yet: band centers by US Letter height. */
-function printPageMarkerCenters(totalHeightPx: number): { num: number; top: number }[] {
-  const h = Math.max(0, totalHeightPx);
-  const n = Math.max(1, Math.ceil(h / US_LETTER_PAGE_CSS_PX));
-  const markers: { num: number; top: number }[] = [];
-  for (let i = 0; i < n; i++) {
-    const bandTop = i * US_LETTER_PAGE_CSS_PX;
-    const bandBottom = Math.min((i + 1) * US_LETTER_PAGE_CSS_PX, h);
-    markers.push({ num: i + 1, top: (bandTop + bandBottom) / 2 });
-  }
-  return markers;
-}
-
-/** Gutter numbers aligned to the new Decorator page-break rails. */
-function gutterMarkersFromPaper(paperEl: HTMLElement): { num: number; top: number }[] {
-  const sh = paperEl.scrollHeight;
-  const breaks = [...paperEl.querySelectorAll('.script-page-break-decorator')] as HTMLElement[];
-  if (breaks.length === 0) {
-    return printPageMarkerCenters(sh);
-  }
-  const midY = (el: HTMLElement) => {
-    const pr = paperEl.getBoundingClientRect();
-    const er = el.getBoundingClientRect();
-    return er.top + er.height / 2 - pr.top;
-  };
-  const mids = breaks.map(midY);
-  const out: { num: number; top: number }[] = [];
-  out.push({ num: 1, top: Math.max(mids[0] / 2, 16) });
-  for (let i = 1; i < mids.length; i++) {
-    out.push({ num: i + 1, top: (mids[i - 1] + mids[i]) / 2 });
-  }
-  out.push({ num: breaks.length + 1, top: (mids[mids.length - 1] + sh) / 2 });
-  return out;
-}
-
-function getSceneTitlesFromStoredContent(contentBase64: string): string[] {
-  const titles: string[] = [];
-  const walk = (node: any) => {
-    if (!node) return;
-    if (node.type === 'sceneHeading') {
-      let t = '';
-      (node.content || []).forEach((c: any) => {
-        if (c.type === 'text') t += c.text || '';
-      });
-      titles.push(t.trim() || 'Scene');
-    }
-    (node.content || []).forEach(walk);
-  };
-  try {
-    const raw = (contentBase64 || '').trim();
-    if (!raw) return titles;
-    const decoded = base64ToUtf8Text(raw);
-    const json = JSON.parse(decoded);
-    walk(json);
-  } catch {
-    /* ignore */
-  }
-  return titles;
-}
-
-function findSceneHeadingDocumentPos(editor: { state: { doc: any } }, sceneIndex: number): number | null {
-  let i = 0;
-  let foundPos: number | null = null;
-  editor.state.doc.descendants((node: any, pos: number) => {
-    if (node.type.name === 'sceneHeading') {
-      if (i === sceneIndex) {
-        foundPos = pos;
-        return false;
-      }
-      i += 1;
-    }
-  });
-  return foundPos;
-}
-
-function applyCommentAttrsById(editor: any, commentId: string, attrs: { text?: string; author?: string; timestamp?: number }) {
-  const markType = editor.state.schema.marks.comment;
-  if (!markType) return;
-  let from = -1;
-  let to = -1;
-  let prev: Record<string, unknown> | null = null;
-  editor.state.doc.descendants((node: any, pos: number) => {
-    if (!node.isText) return;
-    const m = node.marks.find((mk: any) => mk.type === markType && mk.attrs.commentId === commentId);
-    if (m) {
-      if (from < 0) {
-        from = pos;
-        prev = { ...m.attrs };
-      }
-      to = pos + node.text.length;
-    }
-  });
-  if (from < 0 || !prev) return;
-  const next = { ...(prev as Record<string, unknown>), ...attrs, commentId };
-  const tr = editor.state.tr.removeMark(from, to, markType).addMark(from, to, markType.create(next as any));
-  editor.view.dispatch(tr);
-}
-
-const MenuBar = ({
-  editor,
-  allPages,
-  activeScriptPageId,
-  outlineItems,
-}: {
-  editor: any;
-  allPages: ScriptPage[];
-  activeScriptPageId: string | null;
-  outlineItems: { id: string; title: string; pos: number }[];
-}) => {
-  if (!editor) {
-    return null;
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-2 px-3 py-1.5 bg-[#323232] border-b border-black text-[#9ca3af]">
-      <button
-        onClick={() => editor.chain().focus().toggleBold().run()}
-        className={`p-1.5 rounded hover:bg-[#444] hover:text-white transition-colors ${editor.isActive('bold') ? 'bg-[#444] text-white shadow-inner' : ''}`}
-        title="Bold"
-      >
-        <Bold size={16} />
-      </button>
-      <button
-        onClick={() => editor.chain().focus().toggleItalic().run()}
-        className={`p-1.5 rounded hover:bg-[#444] hover:text-white transition-colors ${editor.isActive('italic') ? 'bg-[#444] text-white shadow-inner' : ''}`}
-        title="Italic"
-      >
-        <Italic size={16} />
-      </button>
-      <button
-        onClick={() => editor.chain().focus().toggleUnderline().run()}
-        className={`p-1.5 rounded hover:bg-[#444] hover:text-white transition-colors ${editor.isActive('underline') ? 'bg-[#444] text-white shadow-inner' : ''}`}
-        title="Underline"
-      >
-        <UnderlineIcon size={16} />
-      </button>
-
-      <div className="w-px h-5 bg-[#444] mx-1"></div>
-      
-      <button
-        onClick={() => editor.chain().focus().toggleBulletList().run()}
-        className={`p-1.5 rounded hover:bg-[#444] hover:text-white transition-colors ${editor.isActive('bulletList') ? 'bg-[#444] text-white shadow-inner' : ''}`}
-        title="Bullet List"
-      >
-        <List size={16} />
-      </button>
-      <button
-        onClick={() => editor.chain().focus().toggleOrderedList().run()}
-        className={`p-1.5 rounded hover:bg-[#444] hover:text-white transition-colors ${editor.isActive('orderedList') ? 'bg-[#444] text-white shadow-inner' : ''}`}
-        title="Ordered List"
-      >
-        <ListOrdered size={16} />
-      </button>
-
-      <div className="w-px h-5 bg-[#444] mx-1"></div>
-
-      <input
-        type="color"
-        onInput={event => editor.chain().focus().setColor((event.target as HTMLInputElement).value).run()}
-        value={editor.getAttributes('textStyle').color || '#000000'}
-        data-testid="setColor"
-        className="w-6 h-6 p-0 border-0 rounded cursor-pointer bg-transparent"
-        title="Text Color"
-      />
-      
-      <div className="w-px h-5 bg-[#444] mx-1"></div>
-
-      <button
-        onClick={() => {
-          if (editor.isActive('comment')) {
-            editor.chain().focus().unsetMark('comment').run();
-          } else {
-            const authorName = useProjectStore.getState().project?.settings?.author || 'Unknown Author';
-            editor.chain().focus().setMark('comment', {
-              commentId: Date.now().toString(),
-              text: 'New comment...',
-              author: authorName,
-              timestamp: Date.now()
-            }).run();
-          }
-        }}
-        className={`p-1.5 rounded hover:bg-[#444] hover:text-white transition-colors ${editor.isActive('comment') ? 'bg-[#444] text-[#eab308] shadow-inner' : ''}`}
-        title="Add/Remove Comment"
-      >
-        <MessageCircle size={16} />
-      </button>
-
-      <div className="flex items-center gap-1 max-w-[min(420px,40vw)]">
-        <div className={`p-1.5 rounded shrink-0 transition-colors ${editor.isActive('link') ? 'bg-[#444] text-white shadow-inner' : ''}`}>
-          <LinkIcon size={16} />
-        </div>
-        <select 
-          className="bg-[#151515] border border-[#444] text-xs px-2 py-1 rounded text-neutral-300 outline-none min-w-0 flex-1 truncate"
-          onChange={(e) => {
-            const val = e.target.value;
-            if (val === 'unlink') {
-              editor.chain().focus().extendMarkRange('link').unsetLink().run();
-            } else if (val.startsWith('script-card:') || val.startsWith('script-page:')) {
-              editor.chain().focus().extendMarkRange('link').setLink({ href: val }).run();
-            }
-            e.target.value = '';
-          }}
-          value=""
-          title="Link selection to a scene card or document"
-        >
-          <option value="" disabled>Link to scene…</option>
-          {editor.isActive('link') && <option value="unlink">- Remove link -</option>}
-          {allPages.flatMap((p) => {
-            const titles =
-              p.id === activeScriptPageId && outlineItems.length > 0
-                ? outlineItems.map((o) => o.title)
-                : getSceneTitlesFromStoredContent(p.contentBase64 || '');
-            if (titles.length === 0) {
-              return (
-                <option key={`doc-${p.id}`} value={`script-page:${p.id}`}>
-                  {p.name} (document)
-                </option>
-              );
-            }
-            return titles.map((title, idx) => (
-              <option key={`${p.id}-${idx}`} value={`script-card:${p.id}:${idx}`}>
-                {p.name}: {title.length > 48 ? `${title.slice(0, 48)}…` : title}
-              </option>
-            ));
-          })}
-        </select>
-      </div>
-    </div>
-  );
-};
+import { ScriptMenuBar } from './ScriptMenuBar';
+import { ScriptLeftToolbar } from './ScriptLeftToolbar';
 
 export const ScriptEditor: React.FC = () => {
   const { project, activeScriptPageId, setActiveScriptPageId, updateScriptPageContent, addPageToFolder, removeNode, updateNodeName, updateProjectSettings, updateProjectName } = useProjectStore();
@@ -293,8 +56,6 @@ export const ScriptEditor: React.FC = () => {
   const [printGutterMarkers, setPrintGutterMarkers] = useState<{ num: number; top: number }[]>([]);
 
   const [activeRightTab, setActiveRightTab] = React.useState<'outline' | 'documents' | 'info' | 'notes' | 'comments'>('documents');
-  
-  // Renaming state explicitly for the Right Sidebar
   const [editingTabId, setEditingTabId] = React.useState<string | null>(null);
   const [editingTabName, setEditingTabName] = React.useState('');
   const editingTabIdRef = useRef<string | null>(null);
@@ -471,6 +232,7 @@ export const ScriptEditor: React.FC = () => {
         getEnabled: () => paginationEnabledRef.current,
         pageBodyHeightPx: 864,
       }),
+      ScreenplayFolding,
       ScreenplayTabCycle,
       ScreenplayDefaultEnter,
       CommentMark,
@@ -691,7 +453,6 @@ export const ScriptEditor: React.FC = () => {
 
     if (editor && activeScriptPageId) {
       const runFocus = () => {
-        // Block the editor from stealing focus if the user is typing in a tab rename input
         if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
           return;
         }
@@ -830,12 +591,10 @@ export const ScriptEditor: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e] text-neutral-200 overflow-hidden font-sans">
-      {/* Document Tabs - Strictly Navigation Only */}
       <div className="flex items-center bg-[#282828] border-b border-black overflow-x-auto shrink-0 select-none group">
         {allPages.map(page => (
           <div 
             key={page.id} 
-            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setActiveScriptPageId(page.id)}
             className={`px-4 py-2 text-[13px] font-medium cursor-pointer border-r border-black flex items-center gap-2 transition-colors relative group/tab ${activeScriptPageId === page.id ? 'bg-[#323232] text-white border-t-2 border-t-blue-500' : 'bg-[#282828] text-neutral-400 hover:bg-[#323232] border-t-2 border-t-transparent'}`}
           >
@@ -857,20 +616,11 @@ export const ScriptEditor: React.FC = () => {
         <button onClick={handleNewPage} className="p-2 ml-1 text-neutral-400 hover:text-white hover:bg-[#323232] rounded" title="New Script Document"><Plus size={16} /></button>
       </div>
 
-      <MenuBar editor={editor} allPages={allPages} activeScriptPageId={activeScriptPageId} outlineItems={outlineItems} />
+      <ScriptMenuBar editor={editor} allPages={allPages} activeScriptPageId={activeScriptPageId} outlineItems={outlineItems} />
       
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Toolbar - Line Types */}
-        <div className="w-[72px] shrink-0 bg-[#323232] border-r border-black flex flex-col items-center py-4 gap-4 z-10 text-[#d1d5db]">
-          <LineTypeButton editor={editor} type="sceneHeading" icon={<ImageIcon size={20} strokeWidth={1.5} />} title={`Scene (${(preferences.shortcuts.scriptScene || 'ctrl+1').toUpperCase()})`} label="Scene" />
-          <LineTypeButton editor={editor} type="action" icon={<Clapperboard size={20} strokeWidth={1.5} />} title={`Action (${(preferences.shortcuts.scriptAction || 'ctrl+2').toUpperCase()})`} label="Action" />
-          <LineTypeButton editor={editor} type="character" icon={<User size={20} strokeWidth={1.5} />} title={`Character (${(preferences.shortcuts.scriptCharacter || 'ctrl+3').toUpperCase()})`} label="Character" />
-          <LineTypeButton editor={editor} type="parenthetical" icon={<Parentheses size={20} strokeWidth={1.5} />} title={`Parenthetical (${(preferences.shortcuts.scriptParenthetical || 'ctrl+4').toUpperCase()})`} label="Parens" />
-          <LineTypeButton editor={editor} type="dialogue" icon={<MessageSquare size={20} strokeWidth={1.5} />} title={`Dialogue (${(preferences.shortcuts.scriptDialogue || 'ctrl+5').toUpperCase()})`} label="Dialogue" />
-          <LineTypeButton editor={editor} type="transition" icon={<ChevronsRight size={20} strokeWidth={1.5} />} title={`Transition (${(preferences.shortcuts.scriptTransition || 'ctrl+6').toUpperCase()})`} label="Transition" />
-        </div>
+        <ScriptLeftToolbar editor={editor} />
         
-        {/* Main Editor Area */}
         <div 
           className={
             scriptLayout === 'print'
@@ -938,7 +688,6 @@ export const ScriptEditor: React.FC = () => {
           )}
         </div>
 
-        {/* Right sidebar */}
         <div className="flex shrink-0 z-10 font-sans shadow-xl" style={{ width: rightSidebarWidth }}>
           <div
             role="separator"
@@ -1008,7 +757,7 @@ export const ScriptEditor: React.FC = () => {
                                   setTimeout(() => {
                                     el.focus();
                                     el.select();
-                                  }, 10);
+                                  }, 50);
                                 }
                               }}
                               maxLength={30}
@@ -1025,15 +774,15 @@ export const ScriptEditor: React.FC = () => {
                                 e.stopPropagation();
                                 if (e.key === 'Enter') {
                                   e.preventDefault();
-                                  (e.target as HTMLInputElement).blur();
+                                  (e.target as HTMLInputElement).blur(); 
                                 } else if (e.key === 'Escape') {
                                   e.preventDefault();
-                                  setEditingTabId(null);
+                                  setEditingTabId(null); 
                                 }
                               }}
                               className="bg-[#151515] text-white px-1 outline-none w-full rounded border border-blue-500"
-                              onPointerDown={e => e.stopPropagation()}
                               onMouseDown={e => e.stopPropagation()}
+                              onMouseUp={e => e.stopPropagation()}
                               onClick={e => e.stopPropagation()}
                               onDoubleClick={e => e.stopPropagation()}
                             />
@@ -1211,30 +960,5 @@ export const ScriptEditor: React.FC = () => {
         </div>
       </div>
     </div>
-  );
-};
-
-const LineTypeButton = ({ editor, type, icon, title, label }: { editor: any, type: string, icon: React.ReactNode, title: string, label: string }) => {
-  const isActive = editor?.isActive(type);
-  
-  return (
-    <button
-      onMouseDown={(e) => {
-        e.preventDefault(); 
-        if (editor) {
-          editor.commands.focus();
-          editor.commands.setNode(type);
-        }
-      }}
-      className={`w-full py-2 transition-all flex flex-col items-center justify-center gap-1 border-l-4 ${
-        isActive 
-          ? 'bg-[#444] border-blue-500 text-white shadow-inner' 
-          : 'border-transparent text-[#9ca3af] hover:bg-[#444] hover:text-white'
-      }`}
-      title={title}
-    >
-      <div className="opacity-80">{icon}</div>
-      <span className="text-[10px] font-medium tracking-wide">{label}</span>
-    </button>
   );
 };
