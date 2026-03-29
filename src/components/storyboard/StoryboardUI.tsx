@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { useProjectStore } from '../../store/projectStore';
-import { useAppStore } from '../../store/appStore';
+import { useAppStore, defaultBrushes } from '../../store/appStore';
 import { 
   Pen, Eraser, Undo, Redo, Layers as LayersIcon, 
   Plus, Trash2, MousePointer2, PaintBucket, 
@@ -32,7 +32,7 @@ const BrushButton = ({ icon, label, active, onClick }: { icon: React.ReactNode, 
       active ? 'bg-[#3b82f6] border-blue-400 text-white shadow-inner' : 'bg-[#222] border-black text-neutral-400 hover:bg-[#333] hover:text-neutral-200'
     }`}
   >
-    {icon} <span className="text-[10px] mt-1">{label}</span>
+    {icon} <span className="text-[10px] mt-1 truncate w-full text-center">{label}</span>
   </button>
 );
 
@@ -146,13 +146,45 @@ export const StoryboardSidebar = ({
   swatches: string[]; panelLayersForCanvas: Layer[]; activeLayerId: string | null; activePanelId: string | null;
   getBrushConfig: (id?: string) => BrushConfig;
 }) => {
-  const { preferences, setPreferencesOpen } = useAppStore();
+  const { preferences, addCustomBrush, removeCustomBrush, updateCustomBrush } = useAppStore();
   const { addLayer, removeLayer, setActiveLayerId, updateLayerName, toggleLayerVisibility, setLayerOpacity, moveLayerUp, moveLayerDown, updateProjectSwatches } = useProjectStore();
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Custom Brush Pipeline
+  const handleImportBrush = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      const newBrush: BrushConfig = {
+        id: crypto.randomUUID(),
+        name: file.name.replace(/\.[^/.]+$/, "").substring(0, 12),
+        textureBase64: dataUrl,
+        spacing: 0.1,
+        scatter: 0,
+        rotationMode: 'path',
+        rotationAngle: 0,
+        flow: 0.5,
+        pressureSize: true,
+        pressureOpacity: true
+      };
+      addCustomBrush(newBrush);
+      handleBrushPresetChange(newBrush.id);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const currentBrush = getBrushConfig(brushPreset);
+  const isCustom = !defaultBrushes[brushPreset];
+  const isOverriddenDefault = !!preferences.customBrushes.find(b => b.id === brushPreset) && !!defaultBrushes[brushPreset];
 
   return (
     <div className="w-full h-full flex flex-col bg-[#323232] text-sm overflow-hidden">
-      <div className="flex flex-col border-b border-black shrink-0 max-h-[50%] overflow-y-auto custom-scrollbar">
-        <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black">
+      <div className="flex flex-col border-b border-black shrink-0 max-h-[60%] overflow-y-auto custom-scrollbar">
+        <div className="bg-[#282828] px-3 py-1.5 text-xs font-bold text-neutral-300 flex items-center gap-2 border-b border-black sticky top-0 z-10 shadow-sm">
           <Settings2 size={14} /> Tool Properties
         </div>
         <div className="p-4 flex flex-col gap-4">
@@ -167,35 +199,81 @@ export const StoryboardSidebar = ({
                     <BrushButton icon={<Brush size={18} />} label="Marker" active={brushPreset === 'marker'} onClick={() => handleBrushPresetChange('marker')} />
                     <BrushButton icon={<Circle size={18} className="opacity-50 blur-[1px]" />} label="Airbrush" active={brushPreset === 'airbrush'} onClick={() => handleBrushPresetChange('airbrush')} />
                   </div>
-                  {preferences.customBrushes && preferences.customBrushes.length > 0 && (
+                  
+                  {preferences.customBrushes && preferences.customBrushes.length > 0 && preferences.customBrushes.some(cb => !defaultBrushes[cb.id]) && (
                     <div className="grid grid-cols-4 gap-2 border-t border-black/30 pt-2 mt-2">
-                      {preferences.customBrushes.map((cb: any) => (
-                         <BrushButton key={cb.id} icon={cb.textureBase64 ? <img src={cb.textureBase64} className="w-5 h-5 object-contain invert mix-blend-screen opacity-70 pointer-events-none" /> : <PenTool size={18} />} label={cb.name.substring(0, 8)} active={brushPreset === cb.id} onClick={() => handleBrushPresetChange(cb.id)} />
+                      {preferences.customBrushes.filter(cb => !defaultBrushes[cb.id]).map((cb: any) => (
+                         <BrushButton 
+                            key={cb.id} 
+                            icon={cb.textureBase64 ? <img src={cb.textureBase64} className="w-5 h-5 object-contain invert mix-blend-screen opacity-70 pointer-events-none" /> : <PenTool size={18} />} 
+                            label={cb.name.substring(0, 8)} 
+                            active={brushPreset === cb.id} 
+                            onClick={() => handleBrushPresetChange(cb.id)} 
+                         />
                       ))}
                     </div>
                   )}
                 </div>
               )}
-              <div className={tool === 'pen' ? "mt-2" : ""}>
+              <div className={tool === 'pen' ? "mt-1" : ""}>
                 <label className="flex justify-between mb-1 text-xs text-neutral-300">
                   <span>{tool === 'eraser' ? 'Eraser Size' : 'Maximum Size'}</span> 
                   <span className="bg-[#222222] px-2 py-0.5 rounded border border-black">{brushSize} px</span>
                 </label>
                 <input type="range" min="1" max="100" value={brushSize} onChange={e => handleBrushSizeChange(parseInt(e.target.value))} className="w-full accent-blue-500" />
               </div>
+              
               {tool === 'pen' && (
-                <div className="mt-4 pt-4 border-t border-black/50 flex flex-col gap-3">
-                  <div className="text-xs text-neutral-400 uppercase tracking-wider font-semibold flex justify-between"><span>Brush Settings</span></div>
+                <div className="mt-2 pt-4 border-t border-black/50 flex flex-col gap-3">
+                  <div className="text-xs text-neutral-400 uppercase tracking-wider font-semibold flex justify-between items-center">
+                    <span>Brush Settings</span>
+                    {isCustom ? (
+                      <button onClick={() => { removeCustomBrush(brushPreset); handleBrushPresetChange('solid'); }} className="text-red-400 hover:text-red-300 flex items-center gap-1 transition-colors"><Trash2 size={12}/> Delete</button>
+                    ) : isOverriddenDefault ? (
+                      <button onClick={() => { removeCustomBrush(brushPreset); }} className="text-amber-400 hover:text-amber-300 flex items-center gap-1 transition-colors"><Undo size={12}/> Reset</button>
+                    ) : null}
+                  </div>
+                  
                   <div>
-                    <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Spacing</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(getBrushConfig(brushPreset).spacing * 100)}%</span></label>
-                    <input type="range" min="1" max="100" value={Math.round(getBrushConfig(brushPreset).spacing * 100)} readOnly className="w-full accent-blue-500 opacity-50" title="Custom brush editing coming soon" />
+                    <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Spacing</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.spacing * 100)}%</span></label>
+                    <input type="range" min="1" max="200" value={Math.round(currentBrush.spacing * 100)} onChange={e => updateCustomBrush(brushPreset, { spacing: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
                   </div>
                   <div>
-                    <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Scatter</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(getBrushConfig(brushPreset).scatter * 100)}%</span></label>
-                    <input type="range" min="0" max="100" value={Math.round(getBrushConfig(brushPreset).scatter * 100)} readOnly className="w-full accent-blue-500 opacity-50" title="Custom brush editing coming soon" />
+                    <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Scatter</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.scatter * 100)}%</span></label>
+                    <input type="range" min="0" max="200" value={Math.round(currentBrush.scatter * 100)} onChange={e => updateCustomBrush(brushPreset, { scatter: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
                   </div>
-                  <div className="flex gap-2 mt-1">
-                     <button onClick={() => setPreferencesOpen(true)} className="flex-1 text-[10px] py-1 bg-[#444] hover:bg-[#555] rounded border border-black text-neutral-300" title="Import Alpha PNG as Brush">Import PNG...</button>
+                  <div>
+                    <label className="flex justify-between mb-1 text-[10px] text-neutral-300"><span>Flow (Opacity)</span> <span className="bg-[#222] px-1 py-0.5 rounded border border-black">{Math.round(currentBrush.flow * 100)}%</span></label>
+                    <input type="range" min="1" max="100" value={Math.round(currentBrush.flow * 100)} onChange={e => updateCustomBrush(brushPreset, { flow: parseInt(e.target.value) / 100 })} className="w-full accent-blue-500" />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    <div>
+                      <label className="mb-1 block text-[10px] text-neutral-300">Rotation Mode</label>
+                      <select value={currentBrush.rotationMode} onChange={e => updateCustomBrush(brushPreset, { rotationMode: e.target.value as any })} className="w-full bg-[#151515] border border-neutral-700 rounded px-1.5 py-1 text-[10px] text-neutral-200 outline-none">
+                        <option value="fixed">Fixed</option>
+                        <option value="path">Follow Path</option>
+                        <option value="random">Random</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] text-neutral-300">Base Angle</label>
+                      <input type="number" min="-360" max="360" value={currentBrush.rotationAngle} onChange={e => updateCustomBrush(brushPreset, { rotationAngle: parseInt(e.target.value) || 0 })} className="w-full bg-[#151515] border border-neutral-700 rounded px-1.5 py-1 text-[10px] text-neutral-200 outline-none" />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 mt-1">
+                    <label className="flex items-center gap-1.5 text-[10px] text-neutral-300 cursor-pointer">
+                      <input type="checkbox" checked={currentBrush.pressureSize} onChange={e => updateCustomBrush(brushPreset, { pressureSize: e.target.checked })} className="accent-blue-500" /> Pressure Size
+                    </label>
+                    <label className="flex items-center gap-1.5 text-[10px] text-neutral-300 cursor-pointer">
+                      <input type="checkbox" checked={currentBrush.pressureOpacity} onChange={e => updateCustomBrush(brushPreset, { pressureOpacity: e.target.checked })} className="accent-blue-500" /> Pressure Opacity
+                    </label>
+                  </div>
+
+                  <div className="flex gap-2 mt-2">
+                    <input type="file" accept="image/png, image/jpeg" ref={fileInputRef} className="hidden" onChange={handleImportBrush} />
+                    <button onClick={() => fileInputRef.current?.click()} className="flex-1 text-[10px] py-1.5 bg-[#444] hover:bg-[#555] rounded border border-black text-neutral-300 transition-colors shadow-sm font-medium">Import PNG as Brush...</button>
                   </div>
                 </div>
               )}

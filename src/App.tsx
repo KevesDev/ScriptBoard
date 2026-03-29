@@ -194,6 +194,16 @@ function App() {
     }
   }, []);
 
+  // AAA FIX: Allows other components to trigger global tab switching
+  useEffect(() => {
+    const handleSelectTab = (e: Event) => {
+      const tabId = (e as CustomEvent).detail.tabId;
+      model.doAction(Actions.selectTab(tabId));
+    };
+    window.addEventListener('app:select-tab', handleSelectTab);
+    return () => window.removeEventListener('app:select-tab', handleSelectTab);
+  }, [model]);
+
   const handleFlexLayoutAction = (action: Action) => {
     if (action.type === Actions.SELECT_TAB) {
       if (action.data.tabNode === 'tab-script') {

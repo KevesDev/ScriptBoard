@@ -69,6 +69,7 @@ interface AppState {
   resetPreferences: () => void;
   addCustomBrush: (brush: BrushConfig) => void;
   removeCustomBrush: (id: string) => void;
+  updateCustomBrush: (id: string, config: Partial<BrushConfig>) => void;
 }
 
 export const defaultBrushes: Record<string, BrushConfig> = {
@@ -88,8 +89,8 @@ const defaultPreferences: AppPreferences = {
     zoomIn: 'ctrl+=',
     zoomOut: 'ctrl+-',
     pan: 'space',
-    timelineZoomIn: 'alt+=', // Default Alt/Option + Equals
-    timelineZoomOut: 'alt+-', // Default Alt/Option + Minus
+    timelineZoomIn: 'alt+=',
+    timelineZoomOut: 'alt+-',
     scriptScene: 'ctrl+1',
     scriptAction: 'ctrl+2',
     scriptCharacter: 'ctrl+3',
@@ -114,6 +115,21 @@ export const useAppStore = create<AppState>()(
       resetPreferences: () => set({ preferences: defaultPreferences }),
       addCustomBrush: (brush) => set((state) => ({ preferences: { ...state.preferences, customBrushes: [...state.preferences.customBrushes, brush] } })),
       removeCustomBrush: (id) => set((state) => ({ preferences: { ...state.preferences, customBrushes: state.preferences.customBrushes.filter(b => b.id !== id) } })),
+      updateCustomBrush: (id, config) => set((state) => {
+        const existingIdx = state.preferences.customBrushes.findIndex(b => b.id === id);
+        if (existingIdx >= 0) {
+          const newBrushes = [...state.preferences.customBrushes];
+          newBrushes[existingIdx] = { ...newBrushes[existingIdx], ...config };
+          return { preferences: { ...state.preferences, customBrushes: newBrushes } };
+        } else {
+          // It's a default brush being overridden for the first time
+          const defaultBrush = defaultBrushes[id];
+          if (defaultBrush) {
+            return { preferences: { ...state.preferences, customBrushes: [...state.preferences.customBrushes, { ...defaultBrush, ...config }] } };
+          }
+        }
+        return state;
+      }),
     }),
     {
       name: 'scriptboard-app-storage',
