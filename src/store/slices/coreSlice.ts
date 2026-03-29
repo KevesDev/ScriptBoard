@@ -58,7 +58,7 @@ export const createCoreSlice: StateCreator<ProjectStoreState, [], [], CoreSlice>
       timelinePlayheadSec: 0,
       undoStack: [],
       redoStack: [],
-      lastCommitBase: null,
+      lastCommitBase: normalized, // Anchor the history stack to the loaded project
     });
   },
 

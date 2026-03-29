@@ -11,7 +11,6 @@ import { buildStoryboardTimeline, type FlatPanelLayout } from '../lib/timelineLa
 import { STORYBOARD_CLIPBOARD_STORAGE_KEY, parseStoryboardClipboard, serializeStoryboardClipboard, offsetStrokesBy, selectionBoundsFromStrokes } from '../lib/storyboardClipboard';
 import { computeVectorBucketFillPaths, applyRasterBucketFromCompositeCanvas } from '../lib/vectorPaintBucket';
 import { panelLayersHaveDrawableContent, countInkPixelsInStoryboardThumbnailDataUrl } from '../lib/storyboardThumbnailSafety';
-import { isKeyboardEventTargetTextEntry } from '../lib/keyboardTargets';
 import { Logger } from '../lib/logger';
 
 import { StoryboardToolbar, StoryboardTopBar, StoryboardSidebar, type ToolType, type BrushPreset, type BucketMode } from './storyboard/StoryboardUI';
@@ -98,8 +97,8 @@ export const DrawingCanvas = () => {
     return preferences.customBrushes?.find((b) => b.id === presetId) || defaultBrushes[presetId] || defaultBrushes['solid'];
   }, [preferences.customBrushes]);
 
-  const handleZoomIn = () => setZoom(z => Math.min(3, z + 0.1));
-  const handleZoomOut = () => setZoom(z => Math.max(0.1, z - 0.1));
+  const handleZoomIn = useCallback(() => setZoom(z => Math.min(3, z + 0.1)), []);
+  const handleZoomOut = useCallback(() => setZoom(z => Math.max(0.1, z - 0.1)), []);
   const fitToScreen = useCallback(() => {
     if (workspaceRef.current) {
       setZoom(Math.min(Math.min((workspaceRef.current.clientWidth - 64) / CANVAS_WIDTH, (workspaceRef.current.clientHeight - 64) / CANVAS_HEIGHT), 1.5));
@@ -390,85 +389,95 @@ export const DrawingCanvas = () => {
     }
   };
 
+  // --- AAA Global Intent Routing ---
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (isKeyboardEventTargetTextEntry(e.target)) return;
+    const onPanStart = () => { setIsSpacePanning(true); isPanningRef.current = true; };
+    const onPanStop = () => { setIsSpacePanning(false); isPanningRef.current = false; };
 
-      const key = e.key.toLowerCase();
-      const comboPieces: string[] = [];
-      if (e.ctrlKey || e.metaKey) comboPieces.push('ctrl');
-      if (e.shiftKey) comboPieces.push('shift');
-      if (e.altKey) comboPieces.push('alt');
-
-      let val = key; if (val === ' ') val = 'space';
-      const combo = comboPieces.length > 0 ? `${comboPieces.join('+')}+${val}` : '';
-      const sc = preferences.shortcuts;
-
-      if (combo === sc.zoomIn) { e.preventDefault(); handleZoomIn(); return; }
-      if (combo === sc.zoomOut) { e.preventDefault(); handleZoomOut(); return; }
-
-      if (val === sc.pan || val === 'space') {
-        if (!isSpacePanningRef.current) { setIsSpacePanning(true); isPanningRef.current = true; }
-        e.preventDefault(); return;
-      }
-
+    const onDelete = () => {
       const state = useProjectStore.getState();
-      const resolveL = () => state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelRef.current)?.layers.find(l => l.id === activeLayerRef.current);
-
-      if ((val === 'delete' || val === 'backspace') && selectionRef.current.size > 0) {
-        const L = resolveL();
-        if (L && !L.locked && L.strokes) {
-          e.preventDefault(); state.commitHistory();
-          updateLayerStrokes(activePanelRef.current!, activeLayerRef.current!, L.strokes.filter((_, i) => !selectionRef.current.has(i)));
-          setSelectedStrokeIndices(new Set()); engineRef.current?.setSelectionBounds(null);
-        }
-        return;
-      }
-
-      if (combo === (sc.copy ?? 'ctrl+c') && selectionRef.current.size > 0) {
-        const L = resolveL();
-        if (L?.strokes) {
-          const copied = L.strokes.filter((_, i) => selectionRef.current.has(i));
-          if (copied.length > 0) { e.preventDefault(); try { localStorage.setItem(STORYBOARD_CLIPBOARD_STORAGE_KEY, serializeStoryboardClipboard(copied)); } catch {} }
-        }
-        return;
-      }
-
-      if (combo === (sc.cut ?? 'ctrl+x') && selectionRef.current.size > 0) {
-        const L = resolveL();
-        if (L?.strokes && !L.locked) {
-          const copied = L.strokes.filter((_, i) => selectionRef.current.has(i));
-          if (copied.length > 0) {
-            e.preventDefault(); try { localStorage.setItem(STORYBOARD_CLIPBOARD_STORAGE_KEY, serializeStoryboardClipboard(copied)); } catch {}
-            state.commitHistory(); updateLayerStrokes(activePanelRef.current!, activeLayerRef.current!, L.strokes.filter((_, i) => !selectionRef.current.has(i)));
-            setSelectedStrokeIndices(new Set()); engineRef.current?.setSelectionBounds(null);
-          }
-        }
-        return;
-      }
-
-      if (combo === (sc.paste ?? 'ctrl+v')) {
-        let data: string | null = null; try { localStorage.getItem(STORYBOARD_CLIPBOARD_STORAGE_KEY); } catch { return; }
-        if (!data) return;
-        const pasted = parseStoryboardClipboard(data); if (!pasted || pasted.length === 0) return;
-        const L = resolveL(); if (!L || L.type !== 'vector' || L.locked) return;
-        e.preventDefault(); state.commitHistory();
-        const existing = L.strokes || []; const shifted = offsetStrokesBy(pasted, 20, 20);
-        updateLayerStrokes(activePanelRef.current!, activeLayerRef.current!, [...existing, ...shifted]);
-        const newSel = new Set<number>(); for (let i = 0; i < shifted.length; i++) newSel.add(existing.length + i);
-        setSelectedStrokeIndices(newSel); setTool('select');
-        const b = selectionBoundsFromStrokes(shifted); if (b) engineRef.current?.setSelectionBounds(b);
+      const L = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelRef.current)?.layers.find(l => l.id === activeLayerRef.current);
+      if (selectionRef.current.size > 0 && L && !L.locked && L.strokes) {
+        state.commitHistory();
+        state.updateLayerStrokes(activePanelRef.current!, activeLayerRef.current!, L.strokes.filter((_, i) => !selectionRef.current.has(i)));
+        setSelectedStrokeIndices(new Set()); 
+        engineRef.current?.setSelectionBounds(null);
       }
     };
 
-    const handleKeyUp = (e: KeyboardEvent) => {
-      let val = e.key.toLowerCase(); if (val === ' ') val = 'space';
-      if (val === preferences.shortcuts.pan || val === 'space') { setIsSpacePanning(false); isPanningRef.current = false; }
+    const onCopy = () => {
+      const state = useProjectStore.getState();
+      const L = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelRef.current)?.layers.find(l => l.id === activeLayerRef.current);
+      if (selectionRef.current.size > 0 && L?.strokes) {
+        const copied = L.strokes.filter((_, i) => selectionRef.current.has(i));
+        if (copied.length > 0) { 
+          try { localStorage.setItem(STORYBOARD_CLIPBOARD_STORAGE_KEY, serializeStoryboardClipboard(copied)); } catch {} 
+        }
+      }
     };
 
-    window.addEventListener('keydown', handleKeyDown); window.addEventListener('keyup', handleKeyUp);
-    return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [preferences.shortcuts, updateLayerStrokes]);
+    const onCut = () => {
+      const state = useProjectStore.getState();
+      const L = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelRef.current)?.layers.find(l => l.id === activeLayerRef.current);
+      if (selectionRef.current.size > 0 && L?.strokes && !L.locked) {
+        const copied = L.strokes.filter((_, i) => selectionRef.current.has(i));
+        if (copied.length > 0) {
+          try { localStorage.setItem(STORYBOARD_CLIPBOARD_STORAGE_KEY, serializeStoryboardClipboard(copied)); } catch {}
+          state.commitHistory(); 
+          state.updateLayerStrokes(activePanelRef.current!, activeLayerRef.current!, L.strokes.filter((_, i) => !selectionRef.current.has(i)));
+          setSelectedStrokeIndices(new Set()); 
+          engineRef.current?.setSelectionBounds(null);
+        }
+      }
+    };
+
+    const onPaste = () => {
+      const state = useProjectStore.getState();
+      const L = state.project?.scenes.flatMap(s => s.panels).find(p => p.id === activePanelRef.current)?.layers.find(l => l.id === activeLayerRef.current);
+      let data: string | null = null; 
+      try { data = localStorage.getItem(STORYBOARD_CLIPBOARD_STORAGE_KEY); } catch { return; }
+      if (!data) return;
+      const pasted = parseStoryboardClipboard(data); 
+      if (!pasted || pasted.length === 0) return;
+      if (!L || L.type !== 'vector' || L.locked) return;
+      
+      state.commitHistory();
+      const existing = L.strokes || []; 
+      const shifted = offsetStrokesBy(pasted, 20, 20);
+      state.updateLayerStrokes(activePanelRef.current!, activeLayerRef.current!, [...existing, ...shifted]);
+      
+      const newSel = new Set<number>(); 
+      for (let i = 0; i < shifted.length; i++) newSel.add(existing.length + i);
+      setSelectedStrokeIndices(newSel); 
+      setTool('select');
+      const b = selectionBoundsFromStrokes(shifted); 
+      if (b) engineRef.current?.setSelectionBounds(b);
+    };
+
+    window.addEventListener('shortcut:zoomIn-down', handleZoomIn);
+    window.addEventListener('shortcut:zoomOut-down', handleZoomOut);
+    window.addEventListener('shortcut:pan-down', onPanStart);
+    window.addEventListener('shortcut:pan-up', onPanStop);
+    window.addEventListener('shortcut:space-down', onPanStart);
+    window.addEventListener('shortcut:space-up', onPanStop);
+    window.addEventListener('shortcut:delete-down', onDelete);
+    window.addEventListener('shortcut:copy-down', onCopy);
+    window.addEventListener('shortcut:cut-down', onCut);
+    window.addEventListener('shortcut:paste-down', onPaste);
+
+    return () => {
+      window.removeEventListener('shortcut:zoomIn-down', handleZoomIn);
+      window.removeEventListener('shortcut:zoomOut-down', handleZoomOut);
+      window.removeEventListener('shortcut:pan-down', onPanStart);
+      window.removeEventListener('shortcut:pan-up', onPanStop);
+      window.removeEventListener('shortcut:space-down', onPanStart);
+      window.removeEventListener('shortcut:space-up', onPanStop);
+      window.removeEventListener('shortcut:delete-down', onDelete);
+      window.removeEventListener('shortcut:copy-down', onCopy);
+      window.removeEventListener('shortcut:cut-down', onCut);
+      window.removeEventListener('shortcut:paste-down', onPaste);
+    };
+  }, [handleZoomIn, handleZoomOut]);
 
   if (!project) return <div className="flex h-full items-center justify-center text-neutral-500 bg-[#151515]">No project loaded.</div>;
   if (!activePanelId) return <div className="flex h-full items-center justify-center text-neutral-500 bg-[#151515]">Select a panel from the Outliner to start drawing.</div>;

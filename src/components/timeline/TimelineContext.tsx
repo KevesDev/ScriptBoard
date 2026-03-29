@@ -23,7 +23,6 @@ import { buildAnimaticSegmentsForProject } from '../../lib/animaticSegments';
 import { getPanelIdFromDataTransfer } from '../../lib/panelTimelineDnD';
 import { useAppStore, defaultBrushes } from '../../store/appStore';
 import { nativeAlert } from '../../lib/focusAfterNativeDialog';
-import { isKeyboardEventTargetTextEntry } from '../../lib/keyboardTargets';
 
 export const HEADER_W = 200;
 export const RULER_H = 28;
@@ -294,14 +293,9 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const snapTime = useCallback(
     (t: number) => {
       const clamped = Math.max(0, Math.min(t, timelineDuration));
-      
-      if (!snapping) {
-        return Math.max(0, Math.min(snapToFrame(clamped, fps), timelineDuration));
-      }
-
+      if (!snapping) return Math.max(0, Math.min(snapToFrame(clamped, fps), timelineDuration));
       const visualToleranceSec = 10 / pxPerSec; 
       const toEdge = snapTimeToEdges(clamped, snapEdges, visualToleranceSec); 
-      
       return Math.max(0, Math.min(snapToFrame(toEdge, fps), timelineDuration));
     },
     [snapping, snapEdges, timelineDuration, fps, pxPerSec],
@@ -441,12 +435,7 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       if (d.kind === 'cam-kf-move') { lr.moveTimelineCameraKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx))); return; }
       if (d.kind === 'layer-kf-move') { lr.moveTimelineLayerKeyframe(d.id, lr.snapTime(Math.max(0, d.origT + dx))); return; }
-      
-      if (d.kind === 'sb-clip-move') { 
-        lr.moveStoryboardClip(d.trackId, d.clipId, lr.snapTime(Math.max(0, d.origStart + dx))); 
-        return; 
-      }
-      
+      if (d.kind === 'sb-clip-move') { lr.moveStoryboardClip(d.trackId, d.clipId, lr.snapTime(Math.max(0, d.origStart + dx))); return; }
       if (d.kind === 'sb-clip-resize') {
         const tLine = d.edge === 'right' ? d.origStart + d.origDur + dx : d.origStart + dx;
         const snappedT = lr.snapTime(Math.max(0, tLine));
@@ -481,22 +470,11 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     let majorIntervalFrames = fps; 
     let minorIntervalFrames = 1;   
     
-    if (pxPerSec < 10) {
-      majorIntervalFrames = fps * 60; 
-      minorIntervalFrames = fps * 10; 
-    } else if (pxPerSec < 30) {
-      majorIntervalFrames = fps * 10; 
-      minorIntervalFrames = fps * 5;  
-    } else if (pxPerSec < 100) {
-      majorIntervalFrames = fps * 5;  
-      minorIntervalFrames = fps;      
-    } else if (pxPerSec < 200) {
-      majorIntervalFrames = fps;      
-      minorIntervalFrames = Math.round(fps / 2); 
-    } else {
-      majorIntervalFrames = fps;      
-      minorIntervalFrames = 1;        
-    }
+    if (pxPerSec < 10) { majorIntervalFrames = fps * 60; minorIntervalFrames = fps * 10; } 
+    else if (pxPerSec < 30) { majorIntervalFrames = fps * 10; minorIntervalFrames = fps * 5; } 
+    else if (pxPerSec < 100) { majorIntervalFrames = fps * 5; minorIntervalFrames = fps; } 
+    else if (pxPerSec < 200) { majorIntervalFrames = fps; minorIntervalFrames = Math.round(fps / 2); } 
+    else { majorIntervalFrames = fps; minorIntervalFrames = 1; }
 
     if (minorIntervalFrames < 1) minorIntervalFrames = 1;
 
@@ -541,58 +519,36 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [engine]);
 
+  // --- Global Intent Routing ---
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (isKeyboardEventTargetTextEntry(e.target)) return;
-
-      const key = e.key.toLowerCase();
-      const comboPieces: string[] = [];
-      if (e.ctrlKey || e.metaKey) comboPieces.push('ctrl');
-      if (e.shiftKey) comboPieces.push('shift');
-      if (e.altKey) comboPieces.push('alt');
-
-      let val = key; if (val === ' ') val = 'space';
-      const combo = comboPieces.length > 0 ? `${comboPieces.join('+')}+${val}` : val;
-      
-      const sc = useAppStore.getState().preferences.shortcuts;
-      
-      if (combo === sc.timelineZoomIn) {
-        e.preventDefault();
-        setPxPerSec(p => Math.min(MAX_ZOOM, p * 1.5));
-      } else if (combo === sc.timelineZoomOut) {
-        e.preventDefault();
-        setPxPerSec(p => Math.max(MIN_ZOOM, p / 1.5));
-      }
+    const onZoomIn = () => setPxPerSec(p => Math.min(MAX_ZOOM, p * 1.5));
+    const onZoomOut = () => setPxPerSec(p => Math.max(MIN_ZOOM, p / 1.5));
+    const onToggle = () => handlePlayPause();
+    
+    window.addEventListener('shortcut:timelineZoomIn-down', onZoomIn);
+    window.addEventListener('shortcut:timelineZoomOut-down', onZoomOut);
+    window.addEventListener('shortcut:space-down', onToggle);
+    
+    return () => {
+      window.removeEventListener('shortcut:timelineZoomIn-down', onZoomIn);
+      window.removeEventListener('shortcut:timelineZoomOut-down', onZoomOut);
+      window.removeEventListener('shortcut:space-down', onToggle);
     };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [handlePlayPause]);
 
   const handleImportAudio = async () => {
     if (!window.ipcRenderer || !project?.timeline) return;
     try {
       setIsImportingMedia(true);
       const res: IpcResponse<{ dataUri: string; fileName: string }> = await window.ipcRenderer.invoke(IPC_CHANNELS.AUDIO_IMPORT);
-      if (!res.success || !res.data) {
-        setIsImportingMedia(false);
-        return;
-      }
+      if (!res.success || !res.data) { setIsImportingMedia(false); return; }
       const buf = await decodeAudioFromDataUri(res.data.dataUri);
       const full = buf.duration;
-      
       const peaks = await generatePeaksAsync(buf, 600);
-      
-      const clip: TimelineAudioClip = {
-        id: crypto.randomUUID(), name: res.data.fileName, startTimeSec: snapTime(currentTime), durationSec: full,
-        sourceTrimStartSec: 0, sourceDurationSec: full, dataUri: res.data.dataUri, peaks,
-      };
+      const clip: TimelineAudioClip = { id: crypto.randomUUID(), name: res.data.fileName, startTimeSec: snapTime(currentTime), durationSec: full, sourceTrimStartSec: 0, sourceDurationSec: full, dataUri: res.data.dataUri, peaks };
       commitHistory(); addTimelineAudioClip(importTrackIndex, clip);
-    } catch (err) { 
-      console.error('Failed to import audio:', err); 
-    } finally {
-      setIsImportingMedia(false);
-    }
+    } catch (err) { console.error('Failed to import audio:', err); } 
+    finally { setIsImportingMedia(false); }
   };
 
   const handleImportVideo = async () => {
@@ -600,38 +556,24 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       setIsImportingMedia(true);
       const res: IpcResponse<{ dataUri: string; fileName: string }> = await window.ipcRenderer.invoke(IPC_CHANNELS.VIDEO_IMPORT);
-      if (!res.success || !res.data) {
-        setIsImportingMedia(false);
-        return;
-      }
+      if (!res.success || !res.data) { setIsImportingMedia(false); return; }
       const full = await probeVideoDurationFromDataUri(res.data.dataUri);
       const playable = Math.max(0.05, full || 5);
-      const clip: TimelineVideoClip = {
-        id: crypto.randomUUID(), name: res.data.fileName, startTimeSec: snapTime(currentTime), durationSec: playable,
-        sourceTrimStartSec: 0, sourceDurationSec: playable, dataUri: res.data.dataUri,
-      };
+      const clip: TimelineVideoClip = { id: crypto.randomUUID(), name: res.data.fileName, startTimeSec: snapTime(currentTime), durationSec: playable, sourceTrimStartSec: 0, sourceDurationSec: playable, dataUri: res.data.dataUri };
       commitHistory(); addTimelineVideoClip(0, clip);
-    } catch (err) { 
-      console.error('Failed to import video:', err); 
-    } finally {
-      setIsImportingMedia(false);
-    }
+    } catch (err) { console.error('Failed to import video:', err); } 
+    finally { setIsImportingMedia(false); }
   };
 
   const handleExportAnimatic = async (format: 'mp4' | 'mov') => {
     if (!project) { await nativeAlert('No project loaded.'); return; }
     if (!window.ipcRenderer) { await nativeAlert('Video export is not available in this environment.'); return; }
-    
-    setExportingVideo(true);
-    setExportProgress(0); 
+    setExportingVideo(true); setExportProgress(0); 
 
-    const progressListener = (_event: any, progress: number) => {
-      setExportProgress(progress);
-    };
+    const progressListener = (_event: any, progress: number) => setExportProgress(progress);
 
     try {
       window.ipcRenderer.on(IPC_CHANNELS.ANIMATIC_EXPORT_PROGRESS, progressListener);
-
       const w = project.settings.resolution?.width ?? 1920;
       const h = project.settings.resolution?.height ?? 1080;
       const safeName = (project.name || 'ScriptBoard').replace(/[<>:"/\\|?*]+/g, '_').slice(0, 120);
@@ -649,12 +591,10 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       
       if (res.success && res.data?.filePath) await nativeAlert(`Video saved:\n${res.data.filePath}`);
     } catch (err) { 
-      console.error(err); 
-      await nativeAlert('An error occurred during export.');
+      console.error(err); await nativeAlert('An error occurred during export.');
     } finally { 
       window.ipcRenderer.off(IPC_CHANNELS.ANIMATIC_EXPORT_PROGRESS, progressListener);
-      setExportingVideo(false); 
-      setExportProgress(null); 
+      setExportingVideo(false); setExportProgress(null); 
     }
   };
 
@@ -667,12 +607,6 @@ export const TimelineProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     draggingPlayhead.current = true;
     seekTo(t);
   }, [pxPerSec, snapTime, timelineDuration, seekTo]);
-
-  useEffect(() => {
-    const onToggle = () => handlePlayPause();
-    window.addEventListener('shortcut:play-pause', onToggle);
-    return () => window.removeEventListener('shortcut:play-pause', onToggle);
-  }, [handlePlayPause]);
 
   const value = {
     scrollRef, leftColScrollRef, isPlaying, setIsPlaying, currentTime, setCurrentTime,
