@@ -39,16 +39,19 @@ function domBlockHeight(view: EditorView, pos: number): number {
 }
 
 /**
- * Layout Engine: Calculates absolute page breaks by consulting the 
- * AST Folding State, allowing it to jump hidden text flawlessly.
+ * Layout Engine (Two-Pass System)
+ * Pass 1: Calculates True Page numbers for ALL nodes (hidden or visible).
+ * Pass 2: Generates exactly one physical page break only when visible pages jump.
  */
 function calculatePagination(view: EditorView, pageBodyHeightPx: number): DecorationSet {
-  const blocks: { pos: number; height: number; type: string; isFolded: boolean }[] = [];
-  
   const foldingState = screenplayFoldingKey.getState(view.state);
   const foldedPositions: number[] = foldingState?.foldedPositions || [];
+  
+  // Track metadata for all blocks
+  const blocks: { pos: number; node: any; vh: number; isFolded: boolean; pageNum: number }[] = [];
   let activeFoldEnd = -1;
 
+  // PASS 1: Build the Virtual Document
   view.state.doc.forEach((node, offset) => {
     const pos = offset; 
     let isFolded = false;
@@ -72,77 +75,108 @@ function calculatePagination(view: EditorView, pageBodyHeightPx: number): Decora
 
     let h = 0;
     if (isFolded) {
-      // Fast, stateless height heuristic for hidden text (Courier 12pt = ~60 chars/line, 24px height)
-      const lines = Math.max(1, Math.ceil(node.textContent.length / 60));
+      // Heuristic: ~60 chars/line, 24px height + 16px margins. 
+      // Bypasses the DOM entirely so hidden scenes don't trigger layout thrashing.
+      const lines = Math.max(1, Math.ceil((node.textContent.length || 1) / 60));
       h = lines * 24 + 16; 
     } else {
       h = domBlockHeight(view, pos);
       if (h === -1) {
-        const lines = Math.max(1, Math.ceil(node.textContent.length / 60));
+        const lines = Math.max(1, Math.ceil((node.textContent.length || 1) / 60));
         h = lines * 24 + 16;
       }
     }
 
-    blocks.push({ pos, height: h, type: node.type.name, isFolded });
+    blocks.push({ pos, node, vh: h, isFolded, pageNum: 1 });
   });
 
-  const decos: Decoration[] = [];
+  // PASS 2: Calculate True Page Numbers
   let used = 0;
-  let pageNum = 1;
+  let currentPage = 1;
 
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i];
     
-    if (used + b.height > pageBodyHeightPx && used > 0) {
+    if (used + b.vh > pageBodyHeightPx && used > 0) {
       
+      // Widow/Orphan protection
       let breakIdx = i;
-      if (b.type === 'dialogue' || b.type === 'parenthetical') {
+      if (b.node.type.name === 'dialogue' || b.node.type.name === 'parenthetical') {
         let j = i - 1;
-        while (j > 0 && (blocks[j].type === 'character' || blocks[j].type === 'parenthetical')) {
+        while (j > 0 && (blocks[j].node.type.name === 'character' || blocks[j].node.type.name === 'parenthetical')) {
           breakIdx = j;
           j--;
         }
       }
-
       if (breakIdx === 0) breakIdx = 1;
 
-      // Always advance the true page number
-      pageNum++;
-      const breakPos = blocks[breakIdx].pos;
+      currentPage++;
       
-      // OPTION A: Only render the page break if it is NOT hidden inside a fold
-      if (!blocks[breakIdx].isFolded) {
-        decos.push(Decoration.widget(breakPos, () => {
-          const widget = document.createElement('div');
-          widget.className = 'script-page-break-decorator';
-          widget.contentEditable = 'false'; 
-          // Embed the true page number for the gutter markers to read
-          widget.setAttribute('data-page-start', pageNum.toString()); 
-          
-          widget.style.cssText = `
-            height: 2px;
-            background-color: #d4d4d8; 
-            margin-top: 1.5rem;
-            margin-bottom: 1.5rem;
-            margin-left: -1in;
-            margin-right: -1in;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-            position: relative;
-            z-index: 50;
-            user-select: none;
-            pointer-events: none;
-          `;
-          
-          return widget;
-        }, { side: -1, key: `page-break-${pageNum}` }));
-      }
-
       used = 0;
       for (let k = breakIdx; k <= i; k++) {
-        used += blocks[k].height;
+        blocks[k].pageNum = currentPage;
+        used += blocks[k].vh;
       }
+
+      // If a single block (like a folded 10-page scene) is massive, 
+      // mathematically consume the true pages it spans so the count remains accurate.
+      while (used > pageBodyHeightPx) {
+        currentPage++;
+        used -= pageBodyHeightPx;
+        blocks[i].pageNum = currentPage;
+      }
+
     } else {
-      used += b.height;
+      b.pageNum = currentPage;
+      used += b.vh;
+      
+      // Safety catch for massive initial blocks
+      while (used > pageBodyHeightPx) {
+        currentPage++;
+        used -= pageBodyHeightPx;
+        b.pageNum = currentPage;
+      }
+    }
+  }
+
+  // PASS 3: Generate visual decorators (Only on visible boundaries)
+  const decos: Decoration[] = [];
+  let lastVisiblePage = 1;
+
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    
+    // We never draw visual page breaks inside a folded scene.
+    if (b.isFolded) continue; 
+    
+    // If the True Page Number jumped, draw EXACTLY ONE break.
+    if (b.pageNum > lastVisiblePage) {
+      decos.push(Decoration.widget(b.pos, () => {
+        const widget = document.createElement('div');
+        widget.className = 'script-page-break-decorator';
+        widget.contentEditable = 'false'; 
+        
+        // Pass the True Page Number to the DOM so the Gutter Markers can read it
+        widget.setAttribute('data-page-start', b.pageNum.toString()); 
+        
+        widget.style.cssText = `
+          height: 2px;
+          background-color: #d4d4d8; 
+          margin-top: 1.5rem;
+          margin-bottom: 1.5rem;
+          margin-left: -1in;
+          margin-right: -1in;
+          box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+          position: relative;
+          z-index: 50;
+          user-select: none;
+          pointer-events: none;
+        `;
+        
+        return widget;
+      }, { side: -1, key: `page-break-jump-${b.pageNum}-${b.pos}` }));
+      
+      lastVisiblePage = b.pageNum;
     }
   }
 
@@ -155,7 +189,7 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
   addOptions() {
     return {
       getEnabled: () => false,
-      pageBodyHeightPx: 864,
+      pageBodyHeightPx: 864, 
     };
   },
 
@@ -244,9 +278,11 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
                 return;
               }
 
-              // Deep compare folding states to force repagination when a scene is collapsed
+              // Deep compare folding state. If the user expands or collapses a scene, 
+              // it dynamically alters visual layout without altering the core doc.
               const prevFoldState = screenplayFoldingKey.getState(prevState);
               const newFoldState = screenplayFoldingKey.getState(updatedView.state);
+              
               const prevFolds = prevFoldState?.foldedPositions || [];
               const newFolds = newFoldState?.foldedPositions || [];
               

@@ -17,9 +17,11 @@ export function printPageMarkerCenters(totalHeightPx: number): { num: number; to
 export function gutterMarkersFromPaper(paperEl: HTMLElement): { num: number; top: number }[] {
   const sh = paperEl.scrollHeight;
   const breaks = [...paperEl.querySelectorAll('.script-page-break-decorator')] as HTMLElement[];
+  
   if (breaks.length === 0) {
     return printPageMarkerCenters(sh);
   }
+  
   const midY = (el: HTMLElement) => {
     const pr = paperEl.getBoundingClientRect();
     const er = el.getBoundingClientRect();
@@ -28,10 +30,11 @@ export function gutterMarkersFromPaper(paperEl: HTMLElement): { num: number; top
   const mids = breaks.map(midY);
   const out: { num: number; top: number }[] = [];
   
-  // The space above the first break is always Page 1
+  // The first band is always Page 1
   out.push({ num: 1, top: Math.max(mids[0] / 2, 16) });
   
-  // Read the True Page number from the decorator attributes to jump correctly
+  // Explicitly read the True Page number from the Decorator we injected.
+  // This allows the gutter to visually jump from Page 2 to Page 6 seamlessly.
   for (let i = 0; i < breaks.length - 1; i++) {
     const pageNum = parseInt(breaks[i].getAttribute('data-page-start') || String(i + 2), 10);
     out.push({ num: pageNum, top: (mids[i] + mids[i + 1]) / 2 });
