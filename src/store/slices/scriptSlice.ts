@@ -27,7 +27,7 @@ export interface ScriptSlice {
   updateNodeName: (nodeId: string, name: string) => void;
 }
 
-export const createScriptSlice: StateCreator<ProjectStoreState, [], [], ScriptSlice> = (set, get) => ({
+export const createScriptSlice: StateCreator<ProjectStoreState, [], [], ScriptSlice> = (set) => ({
   updateScriptPageContent: (pageId, contentBase64) =>
     set((state) => {
       if (!state.project) return state;

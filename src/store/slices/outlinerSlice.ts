@@ -19,7 +19,7 @@ export interface OutlinerSlice {
   cyclePanelTransitionOut: (panelId: string) => void;
 }
 
-export const createOutlinerSlice: StateCreator<ProjectStoreState, [], [], OutlinerSlice> = (set, get) => ({
+export const createOutlinerSlice: StateCreator<ProjectStoreState, [], [], OutlinerSlice> = (set) => ({
   addScene: (scene) => 
     set((state) => {
       if (!state.project) return state;

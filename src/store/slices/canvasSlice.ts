@@ -15,7 +15,7 @@ export interface CanvasSlice {
   updatePanelThumbnail: (panelId: string, thumbnailBase64: string) => void;
 }
 
-export const createCanvasSlice: StateCreator<ProjectStoreState, [], [], CanvasSlice> = (set, get) => ({
+export const createCanvasSlice: StateCreator<ProjectStoreState, [], [], CanvasSlice> = (set) => ({
   addLayer: (panelId, type) =>
     set((state) => {
       if (!state.project) return state;

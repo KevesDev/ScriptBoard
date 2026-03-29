@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { Project } from '@common/models';
-import { createDefaultTimeline, normalizeProject } from '@common/projectMigrate';
+import { createDefaultTimeline } from '@common/projectMigrate';
 
 import { createCoreSlice, type CoreSlice } from './slices/coreSlice';
 import { createOutlinerSlice, type OutlinerSlice } from './slices/outlinerSlice';
@@ -8,9 +8,8 @@ import { createCanvasSlice, type CanvasSlice } from './slices/canvasSlice';
 import { createScriptSlice, type ScriptSlice } from './slices/scriptSlice';
 import { createTimelineSlice, type TimelineSlice } from './slices/timelineSlice';
 
-export { normalizeProject, createDefaultTimeline } from '@common/projectMigrate';
+export { createDefaultTimeline } from '@common/projectMigrate';
 
-// Master State Interface combining all modules
 export type ProjectStoreState = CoreSlice & OutlinerSlice & CanvasSlice & ScriptSlice & TimelineSlice;
 
 export const generateEmptyProject = (): Project => ({
@@ -42,7 +41,6 @@ export const generateEmptyProject = (): Project => ({
   ]
 });
 
-// The Unified Store
 export const useProjectStore = create<ProjectStoreState>()((...a) => ({
   ...createCoreSlice(...a),
   ...createOutlinerSlice(...a),

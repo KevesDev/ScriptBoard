@@ -48,7 +48,7 @@ export interface TimelineSlice {
   resizeStoryboardClip: (trackId: string, clipId: string, edge: 'left' | 'right', timelineTimeSec: number) => void;
 }
 
-export const createTimelineSlice: StateCreator<ProjectStoreState, [], [], TimelineSlice> = (set, get) => ({
+export const createTimelineSlice: StateCreator<ProjectStoreState, [], [], TimelineSlice> = (set) => ({
   setAnimaticEditingMode: (enabled) =>
     set((state) => {
       if (!state.project?.timeline) return state;
@@ -111,7 +111,6 @@ export const createTimelineSlice: StateCreator<ProjectStoreState, [], [], Timeli
       const tl = state.project.timeline;
       const newTrack: TimelineAudioTrack = {
         id: crypto.randomUUID(),
-        name: `A${tl.audioTracks.length + 1}`,
         muted: false,
         solo: false,
         locked: false,

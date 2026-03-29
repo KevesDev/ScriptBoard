@@ -14,13 +14,14 @@ export const TimelineSidebar: React.FC = () => {
     commitHistory, setTimelineVideoTrackMuted,
     addTimelineCameraKeyframe, addStoryboardTrack, removeStoryboardTrack, setStoryboardTrackMuted,
     addTimelineLayerKeyframe, setTimelineTrackMuted, setTimelineTrackSolo,
-    addTimelineAudioTrack, removeTimelineAudioTrack
+    addTimelineAudioTrack, removeTimelineAudioTrack,
+    activePanelId, activeLayerId
   } = useProjectStore();
 
   const {
     leftColScrollRef, playheadTotalHeight, showVideoTrack, videoTracks, showCameraTrack,
     currentTime, activeSequenceName, activeMetaSummary, storyboardTracksSorted,
-    snapTime, showLayerTrack, activeLayerName, audioTracks, activePanelId, activeLayerId
+    snapTime, showLayerTrack, activeLayerName, audioTracks
   } = useTimelineContext();
 
   return (
@@ -48,7 +49,6 @@ export const TimelineSidebar: React.FC = () => {
            <div className="text-neutral-500">Sc. <span className="text-sky-200">{activeMetaSummary?.sceneIndex ?? '-'}</span> · P. <span className="text-sky-200">{activeMetaSummary?.panelIndexInScene ?? '-'}</span></div>
         </div>
         
-        {/* STORYBOARD TRACKS */}
         {storyboardTracksSorted.map((tr) => (
           <div key={tr.id} className="flex items-center justify-between gap-0.5 border-b border-black px-1 py-0.5 text-[10px] font-medium text-neutral-300" style={{ height: STORYBOARD_ROW_H }}>
             <span className="flex min-w-0 flex-1 items-center gap-0.5 truncate" title={tr.name}>
@@ -87,7 +87,6 @@ export const TimelineSidebar: React.FC = () => {
           </div>
         )}
         
-        {/* AUDIO TRACKS */}
         {audioTracks.map((tr, i) => (
           <div key={tr.id} className="flex items-center justify-between border-b border-black px-2 py-1 text-[10px]" style={{ height: AUDIO_ROW_H }}>
             <span className="font-medium text-neutral-300">A{i + 1}</span>

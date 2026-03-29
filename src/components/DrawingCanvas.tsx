@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useAppStore, defaultBrushes } from '../store/appStore';
-import type { Stroke, Layer, BrushConfig } from '@common/models';
+import type { Layer, BrushConfig } from '@common/models';
 import { renderBrushStrokeToContext, BrushTextureManager } from '../engine/BrushEngine';
 import { StoryboardEngine } from '../engine/StoryboardEngine';
 import { sampleCameraAtTime, sampleLayerAtTime } from '../lib/timelineKeyframes';
@@ -44,7 +44,6 @@ export const DrawingCanvas = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(288); 
 
-  const canvasContainerRef = useRef<HTMLDivElement>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<StoryboardEngine | null>(null);
   const thumbnailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -324,7 +323,6 @@ export const DrawingCanvas = () => {
 
        let newActiveId = getTopStoryboardPanelIdAtTime(proj, t);
        if (!newActiveId) {
-           // AAA FIX: If the timeline tracks are being used, gaps should render as empty/black!
            const hasClips = proj.timeline?.storyboardTracks?.some(tr => tr.clips.length > 0);
            if (!hasClips) {
                newActiveId = flatPanelsRef.current.find(x => t >= x.startTime && t < x.endTime)?.id ?? null;

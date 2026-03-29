@@ -1,11 +1,11 @@
 import React, { useEffect } from 'react';
 import { useProjectStore } from '../../store/projectStore';
-import { useTimelineContext, formatTimecode, SKIP_SECONDS, MIN_ZOOM, MAX_ZOOM, DEFAULT_PX_PER_SEC } from './TimelineContext';
+import { useTimelineContext, formatTimecode, SKIP_SECONDS, MIN_ZOOM, MAX_ZOOM } from './TimelineContext';
 import { PlaybackEngine } from '../../engine/PlaybackEngine';
 import {
   Play, Pause, Import, ZoomIn, ZoomOut, MoreHorizontal, SquareStack, Film,
   Clapperboard, ChevronsLeft, ChevronLeft, ChevronRight, ChevronsRight, Repeat,
-  FileVideo, Loader2, Magnet, AudioWaveform, Camera, Layers2, Video
+  FileVideo, Loader2, Magnet, AudioWaveform, Video
 } from 'lucide-react';
 import { hasAnyStoryboardTimelineClips } from '../../lib/timelineStoryboardComposition';
 

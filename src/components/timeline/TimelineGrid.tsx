@@ -55,7 +55,6 @@ export const TimelineGrid: React.FC = () => {
     showLayerTrack, audioTracks, onTimelinePointerDown, dragRef, flatPanels, seekTo
   } = useTimelineContext();
 
-  // BIND PLAYBACK ENGINE TO THE DOM PLAYHEAD (React-Free Playback)
   useEffect(() => {
     PlaybackEngine.getInstance().playheadEl = document.getElementById('sb-playhead-line');
   }, []);
@@ -92,7 +91,6 @@ export const TimelineGrid: React.FC = () => {
     <div ref={scrollRef} className="min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-auto bg-[#1e1e1e]" onPointerDown={(e) => { if (scrollRef.current && (e.target as HTMLElement).closest('[data-timeline-surface]')) onTimelinePointerDown(e, scrollRef.current); }}>
       <div className="relative" style={{ width: timelineWidthPx, minHeight: playheadTotalHeight }}>
         
-        {/* NATIVE PLAYHEAD IDENTIFIER APPLIED HERE */}
         <div id="sb-playhead-line" className="pointer-events-none absolute top-0 z-30 w-px bg-red-500 will-change-transform" style={{ left: 0, transform: `translateX(${playheadPx}px)`, height: playheadTotalHeight }}>
           <div className="absolute -top-0 left-1/2 h-0 w-0 -translate-x-1/2 border-x-[5px] border-t-[7px] border-x-transparent border-t-red-500" />
         </div>
@@ -111,7 +109,7 @@ export const TimelineGrid: React.FC = () => {
         {showCameraTrack && (
           <div data-timeline-surface className="relative border-b border-neutral-800 bg-[#1e2428]" style={{ width: timelineWidthPx, height: KF_TRACK_H }}>
             <div className="pointer-events-none absolute inset-x-0 top-1/2 h-px bg-neutral-700/80" />
-            {project.timeline.cameraKeyframes.map((k) => (
+            {project.timeline?.cameraKeyframes?.map((k) => (
               <button key={k.id} type="button" data-no-scrub className="absolute top-1/2 z-20 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border border-sky-500 bg-sky-600 shadow hover:bg-sky-400" style={{ left: k.timeSec * pxPerSec }} onPointerDown={(e) => { e.stopPropagation(); (e.target as Element).setPointerCapture(e.pointerId); if (e.altKey) { void (async () => { if (await nativeConfirm('Remove keyframe?')) { commitHistory(); removeTimelineCameraKeyframe(k.id); } })(); return; } commitHistory(); dragRef.current = { kind: 'cam-kf-move', id: k.id, startX: e.clientX, origT: k.timeSec }; }} />
             ))}
           </div>
@@ -145,7 +143,7 @@ export const TimelineGrid: React.FC = () => {
         {showLayerTrack && (
           <div data-timeline-surface className="relative border-b border-neutral-800 bg-[#151c18]" style={{ width: timelineWidthPx, height: KF_TRACK_H }}>
             <div className="pointer-events-none absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-neutral-700/80" />
-            {project.timeline.layerKeyframes.filter((k) => k.panelId === activePanelId && k.layerId === activeLayerId).map((k) => (
+            {project.timeline?.layerKeyframes?.filter((k) => k.panelId === activePanelId && k.layerId === activeLayerId).map((k) => (
               <button key={k.id} type="button" data-no-scrub className="absolute top-1/2 z-20 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border border-emerald-500 bg-emerald-700 shadow hover:border-emerald-300 hover:bg-emerald-600" style={{ left: k.timeSec * pxPerSec }} onPointerDown={(e) => { e.stopPropagation(); (e.target as Element).setPointerCapture(e.pointerId); if (e.altKey) { void (async () => { if (await nativeConfirm('Remove keyframe?')) { commitHistory(); removeTimelineLayerKeyframe(k.id); } })(); return; } commitHistory(); dragRef.current = { kind: 'layer-kf-move', id: k.id, startX: e.clientX, origT: k.timeSec }; }} />
             ))}
           </div>

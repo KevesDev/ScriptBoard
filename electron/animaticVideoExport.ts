@@ -17,28 +17,23 @@ const PLACEHOLDER_PNG = Buffer.from(
 const AUDIO_SAMPLE_RATE = 48000;
 
 export type AnimaticExportSegment = {
-  /** image/jpeg, image/png, etc., or null for placeholder */
   dataUri: string | null;
   durationSec: number;
 };
 
-// Safely parse both native file URLs and legacy corrupted test URLs for FFmpeg
 function resolveAssetPath(dataUri: string): string | null {
   if (!dataUri.startsWith('asset://')) return null;
   
   try {
     let fileUrl = dataUri;
     
-    // 1.
     if (fileUrl.startsWith('asset://localhost/')) {
       fileUrl = fileUrl.replace('asset://localhost/', 'file:///');
     } 
-    // 2. Rescue Test 1: URL Encoded
     else if (fileUrl.startsWith('asset://local/')) {
       const raw = decodeURIComponent(fileUrl.slice('asset://local/'.length));
       fileUrl = pathToFileURL(raw).href;
     } 
-    // 3. Rescue Test 2: Chromium Mangled Host
     else if (fileUrl.startsWith('asset://') && !fileUrl.startsWith('asset:///')) {
       const withoutScheme = fileUrl.slice('asset://'.length);
       const match = withoutScheme.match(/^([a-zA-Z])\/(.*)/);
@@ -97,7 +92,6 @@ function runFfmpeg(
       stderr += chunk;
       
       if (onProgress && totalDurationSec && totalDurationSec > 0) {
-        // Parse time=00:00:05.23 from FFmpeg stderr stream
         const timeMatch = chunk.match(/time=(\d{2}):(\d{2}):(\d{2}\.\d+)/);
         if (timeMatch) {
           const hours = parseInt(timeMatch[1], 10);
@@ -207,7 +201,7 @@ export async function exportAnimaticVideo(params: {
         
         const assetPath = resolveAssetPath(c.dataUri);
         if (!assetPath) {
-          throw new Error(`Strict Asset Pipeline Violation: Audio clip [${c.id}] is missing a valid asset:// path. Data URI received: ${c.dataUri.substring(0, 30)}...`);
+          throw new Error(`Strict Asset Pipeline Violation: Audio clip missing a valid asset:// path. Data URI received: ${c.dataUri.substring(0, 30)}...`);
         }
         
         args.push('-i', assetPath);

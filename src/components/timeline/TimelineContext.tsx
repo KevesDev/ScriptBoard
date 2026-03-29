@@ -61,8 +61,8 @@ export function formatTimecode(seconds: number, fps: number): string {
 }
 
 export interface TimelineContextValue {
-  scrollRef: React.RefObject<HTMLDivElement>;
-  leftColScrollRef: React.RefObject<HTMLDivElement>;
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+  leftColScrollRef: React.RefObject<HTMLDivElement | null>;
   isPlaying: boolean;
   setIsPlaying: React.Dispatch<React.SetStateAction<boolean>>;
   currentTime: number;

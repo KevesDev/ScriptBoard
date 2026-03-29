@@ -20,6 +20,7 @@ export interface StoryboardEngineConfig {
 
 export class StoryboardEngine {
   private app: PIXI.Application;
+  private config: StoryboardEngineConfig;
   private scene = {
     root: new PIXI.Container(),
     cameraRoot: new PIXI.Container(),
@@ -43,14 +44,15 @@ export class StoryboardEngine {
     panelLayers: [] as Layer[],
     onionBeforeStacks: [] as Layer[][],
     onionAfterStacks: [] as Layer[][],
-    onionBeforeOpacities: [] as number[], // FIXED: Explicitly tracked state
-    onionAfterOpacities: [] as number[],  // FIXED: Explicitly tracked state
+    onionBeforeOpacities: [] as number[],
+    onionAfterOpacities: [] as number[], 
     underlayStacks: [] as Layer[][],
     onionSkinEnabled: false,
     onionPrefs: { beforeColor: '#ff6b6b', afterColor: '#4dabf7' } as any,
     selectedStrokeIndices: new Set<number>(),
     cameraTransform: null as any,
     layerTransform: null as any,
+    zoom: 1,
   };
 
   private isDrawing = false;
@@ -64,7 +66,8 @@ export class StoryboardEngine {
     resizeState: { active: false, handle: null as 'tl'|'tr'|'bl'|'br'|null, scaleX: 1, scaleY: 1, originX: 0, originY: 0 }
   };
 
-  constructor(private config: StoryboardEngineConfig) {
+  constructor(config: StoryboardEngineConfig) {
+    this.config = config;
     Logger.info('StoryboardEngine', 'Initializing WebGL Application');
     this.app = new PIXI.Application({
       width: config.width,

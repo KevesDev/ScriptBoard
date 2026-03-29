@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAppStore, type ScriptEditorLayout } from '../store/appStore';
+import { useAppStore } from '../store/appStore';
 import { useProjectStore } from '../store/projectStore';
 import { IPC_CHANNELS } from '@common/ipc';
 import { nativeAlert } from '../lib/focusAfterNativeDialog';
