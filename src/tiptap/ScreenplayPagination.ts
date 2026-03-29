@@ -2,6 +2,7 @@ import { Extension } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
 import type { EditorView } from '@tiptap/pm/view';
+import { screenplayFoldingKey } from './ScreenplayFolding';
 
 export const screenplayPaginationKey = new PluginKey('screenplayPagination');
 
@@ -30,12 +31,6 @@ function domBlockHeight(view: EditorView, pos: number): number {
   }
   if (!el || el.nodeType !== 1) return -1;
   
-  // AAA BUG FIX: Check if the element was explicitly hidden by the Folding Plugin
-  // This is lightning fast and prevents the 24px fallback loop on invisible scenes.
-  if (el.classList.contains('script-folded-node')) {
-    return 0; 
-  }
-  
   const cs = window.getComputedStyle(el);
   const mb = parseFloat(cs.marginBottom) || 0;
   const h = el.offsetHeight + mb;
@@ -44,17 +39,51 @@ function domBlockHeight(view: EditorView, pos: number): number {
 }
 
 /**
- * AAA Layout Engine: Calculates where page breaks SHOULD be visually 
- * rendered without ever modifying the underlying document data.
+ * Layout Engine: Calculates absolute page breaks by consulting the 
+ * AST Folding State, allowing it to jump hidden text flawlessly.
  */
 function calculatePagination(view: EditorView, pageBodyHeightPx: number): DecorationSet {
-  const blocks: { pos: number; height: number; type: string }[] = [];
+  const blocks: { pos: number; height: number; type: string; isFolded: boolean }[] = [];
   
+  const foldingState = screenplayFoldingKey.getState(view.state);
+  const foldedPositions: number[] = foldingState?.foldedPositions || [];
+  let activeFoldEnd = -1;
+
   view.state.doc.forEach((node, offset) => {
     const pos = offset; 
-    let h = domBlockHeight(view, pos);
-    if (h === -1) h = 24; // Fallback height ONLY if the node is unrendered, not folded
-    blocks.push({ pos, height: h, type: node.type.name });
+    let isFolded = false;
+
+    if (node.type.name === 'sceneHeading') {
+      if (foldedPositions.includes(pos)) {
+        let nextHeadingPos = view.state.doc.content.size;
+        view.state.doc.nodesBetween(pos + node.nodeSize, view.state.doc.content.size, (n, p) => {
+          if (n.type.name === 'sceneHeading' && p > pos) {
+            nextHeadingPos = p;
+            return false;
+          }
+        });
+        activeFoldEnd = nextHeadingPos;
+      } else {
+        activeFoldEnd = -1;
+      }
+    } else if (activeFoldEnd > -1 && pos < activeFoldEnd) {
+      isFolded = true;
+    }
+
+    let h = 0;
+    if (isFolded) {
+      // Fast, stateless height heuristic for hidden text (Courier 12pt = ~60 chars/line, 24px height)
+      const lines = Math.max(1, Math.ceil(node.textContent.length / 60));
+      h = lines * 24 + 16; 
+    } else {
+      h = domBlockHeight(view, pos);
+      if (h === -1) {
+        const lines = Math.max(1, Math.ceil(node.textContent.length / 60));
+        h = lines * 24 + 16;
+      }
+    }
+
+    blocks.push({ pos, height: h, type: node.type.name, isFolded });
   });
 
   const decos: Decoration[] = [];
@@ -77,30 +106,36 @@ function calculatePagination(view: EditorView, pageBodyHeightPx: number): Decora
 
       if (breakIdx === 0) breakIdx = 1;
 
+      // Always advance the true page number
       pageNum++;
       const breakPos = blocks[breakIdx].pos;
       
-      decos.push(Decoration.widget(breakPos, () => {
-        const widget = document.createElement('div');
-        widget.className = 'script-page-break-decorator';
-        widget.contentEditable = 'false'; 
-        
-        widget.style.cssText = `
-          height: 2px;
-          background-color: #d4d4d8; 
-          margin-top: 1.5rem;
-          margin-bottom: 1.5rem;
-          margin-left: -1in;
-          margin-right: -1in;
-          box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-          position: relative;
-          z-index: 50;
-          user-select: none;
-          pointer-events: none;
-        `;
-        
-        return widget;
-      }, { side: -1, key: `page-break-${pageNum}` }));
+      // OPTION A: Only render the page break if it is NOT hidden inside a fold
+      if (!blocks[breakIdx].isFolded) {
+        decos.push(Decoration.widget(breakPos, () => {
+          const widget = document.createElement('div');
+          widget.className = 'script-page-break-decorator';
+          widget.contentEditable = 'false'; 
+          // Embed the true page number for the gutter markers to read
+          widget.setAttribute('data-page-start', pageNum.toString()); 
+          
+          widget.style.cssText = `
+            height: 2px;
+            background-color: #d4d4d8; 
+            margin-top: 1.5rem;
+            margin-bottom: 1.5rem;
+            margin-left: -1in;
+            margin-right: -1in;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+            position: relative;
+            z-index: 50;
+            user-select: none;
+            pointer-events: none;
+          `;
+          
+          return widget;
+        }, { side: -1, key: `page-break-${pageNum}` }));
+      }
 
       used = 0;
       for (let k = breakIdx; k <= i; k++) {
@@ -120,7 +155,7 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
   addOptions() {
     return {
       getEnabled: () => false,
-      pageBodyHeightPx: 864, // 11 inches minus 1-inch top/bottom margins
+      pageBodyHeightPx: 864,
     };
   },
 
@@ -206,6 +241,24 @@ export const ScreenplayPagination = Extension.create<ScreenplayPaginationOptions
               
               if (prevState.doc !== updatedView.state.doc) {
                 schedule();
+                return;
+              }
+
+              // Deep compare folding states to force repagination when a scene is collapsed
+              const prevFoldState = screenplayFoldingKey.getState(prevState);
+              const newFoldState = screenplayFoldingKey.getState(updatedView.state);
+              const prevFolds = prevFoldState?.foldedPositions || [];
+              const newFolds = newFoldState?.foldedPositions || [];
+              
+              if (prevFolds.length !== newFolds.length) {
+                schedule();
+                return;
+              }
+              for (let i = 0; i < prevFolds.length; i++) {
+                if (prevFolds[i] !== newFolds[i]) {
+                  schedule();
+                  return;
+                }
               }
             },
             destroy: () => {

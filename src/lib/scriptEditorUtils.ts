@@ -27,11 +27,20 @@ export function gutterMarkersFromPaper(paperEl: HTMLElement): { num: number; top
   };
   const mids = breaks.map(midY);
   const out: { num: number; top: number }[] = [];
+  
+  // The space above the first break is always Page 1
   out.push({ num: 1, top: Math.max(mids[0] / 2, 16) });
-  for (let i = 1; i < mids.length; i++) {
-    out.push({ num: i + 1, top: (mids[i - 1] + mids[i]) / 2 });
+  
+  // Read the True Page number from the decorator attributes to jump correctly
+  for (let i = 0; i < breaks.length - 1; i++) {
+    const pageNum = parseInt(breaks[i].getAttribute('data-page-start') || String(i + 2), 10);
+    out.push({ num: pageNum, top: (mids[i] + mids[i + 1]) / 2 });
   }
-  out.push({ num: breaks.length + 1, top: (mids[mids.length - 1] + sh) / 2 });
+  
+  const lastBreak = breaks[breaks.length - 1];
+  const lastPageNum = parseInt(lastBreak.getAttribute('data-page-start') || String(breaks.length + 1), 10);
+  out.push({ num: lastPageNum, top: (mids[mids.length - 1] + sh) / 2 });
+  
   return out;
 }
 

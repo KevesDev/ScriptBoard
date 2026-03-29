@@ -5,7 +5,7 @@ import { TextStyle } from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
 import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
-import { Plus, X, PenLine } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 import { useProjectStore } from '../store/projectStore';
 import { useAppStore } from '../store/appStore';
 import type { ScriptFolder, ScriptPage } from '@common/models';
@@ -228,11 +228,11 @@ export const ScriptEditor: React.FC = () => {
       Dialogue,
       Parenthetical,
       Transition,
+      ScreenplayFolding,
       ScreenplayPagination.configure({
         getEnabled: () => paginationEnabledRef.current,
         pageBodyHeightPx: 864,
       }),
-      ScreenplayFolding,
       ScreenplayTabCycle,
       ScreenplayDefaultEnter,
       CommentMark,
@@ -595,6 +595,7 @@ export const ScriptEditor: React.FC = () => {
         {allPages.map(page => (
           <div 
             key={page.id} 
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setActiveScriptPageId(page.id)}
             className={`px-4 py-2 text-[13px] font-medium cursor-pointer border-r border-black flex items-center gap-2 transition-colors relative group/tab ${activeScriptPageId === page.id ? 'bg-[#323232] text-white border-t-2 border-t-blue-500' : 'bg-[#282828] text-neutral-400 hover:bg-[#323232] border-t-2 border-t-transparent'}`}
           >
