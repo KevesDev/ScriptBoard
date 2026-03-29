@@ -21,7 +21,6 @@ import {
   Plus,
   X,
   MessageCircle,
-  PenLine,
 } from 'lucide-react';
 import { useProjectStore } from '../store/projectStore';
 import { useAppStore } from '../store/appStore';
@@ -294,8 +293,16 @@ export const ScriptEditor: React.FC = () => {
   const [printGutterMarkers, setPrintGutterMarkers] = useState<{ num: number; top: number }[]>([]);
 
   const [activeRightTab, setActiveRightTab] = React.useState<'outline' | 'documents' | 'info' | 'notes' | 'comments'>('documents');
+  
+  // Renaming state explicitly for the Right Sidebar
   const [editingTabId, setEditingTabId] = React.useState<string | null>(null);
   const [editingTabName, setEditingTabName] = React.useState('');
+  const editingTabIdRef = useRef<string | null>(null);
+  
+  useEffect(() => {
+    editingTabIdRef.current = editingTabId;
+  }, [editingTabId]);
+
   const [activeCommentId, setActiveCommentId] = React.useState<string | null>(null);
   const [activeCommentData, setActiveCommentData] = React.useState<{id: string, text: string, author: string} | null>(null);
 
@@ -684,7 +691,11 @@ export const ScriptEditor: React.FC = () => {
 
     if (editor && activeScriptPageId) {
       const runFocus = () => {
-        if (commentSidebarFocusRef.current || loadingPageContentRef.current) return;
+        // Block the editor from stealing focus if the user is typing in a tab rename input
+        if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') {
+          return;
+        }
+        if (commentSidebarFocusRef.current || loadingPageContentRef.current || editingTabIdRef.current) return;
         editor.commands.focus();
         scheduleReturnFocusToProseMirror();
       };
@@ -819,64 +830,18 @@ export const ScriptEditor: React.FC = () => {
 
   return (
     <div className="flex flex-col h-full bg-[#1e1e1e] text-neutral-200 overflow-hidden font-sans">
-      {/* Document Tabs */}
+      {/* Document Tabs - Strictly Navigation Only */}
       <div className="flex items-center bg-[#282828] border-b border-black overflow-x-auto shrink-0 select-none group">
         {allPages.map(page => (
           <div 
             key={page.id} 
-            onMouseDown={(e) => e.stopPropagation()}
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setActiveScriptPageId(page.id)}
             className={`px-4 py-2 text-[13px] font-medium cursor-pointer border-r border-black flex items-center gap-2 transition-colors relative group/tab ${activeScriptPageId === page.id ? 'bg-[#323232] text-white border-t-2 border-t-blue-500' : 'bg-[#282828] text-neutral-400 hover:bg-[#323232] border-t-2 border-t-transparent'}`}
           >
-            {editingTabId === page.id ? (
-              <input 
-                autoFocus
-                onFocus={(e) => e.target.select()}
-                maxLength={30}
-                value={editingTabName}
-                onChange={e => setEditingTabName(e.target.value)}
-                onBlur={() => {
-                  const trimmed = editingTabName.trim();
-                  if (trimmed !== '' && trimmed !== page.name) {
-                    updateNodeName(page.id, trimmed);
-                  }
-                  setEditingTabId(null);
-                }}
-                onKeyDown={e => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') {
-                    const trimmed = editingTabName.trim();
-                    if (trimmed !== '' && trimmed !== page.name) {
-                      updateNodeName(page.id, trimmed);
-                    }
-                    setEditingTabId(null);
-                  } else if (e.key === 'Escape') {
-                    setEditingTabId(null);
-                  }
-                }}
-                className="bg-[#151515] text-white px-1 outline-none w-24 rounded border border-blue-500"
-                onClick={e => e.stopPropagation()}
-                onMouseDown={e => e.stopPropagation()}
-              />
-            ) : (
-              <div className="flex items-center gap-1.5">
-                <span className="whitespace-nowrap select-none">{page.name}</span>
-                {/* AAA FIX: Explicitly bound to onClick to ensure full focus capture */}
-                <button 
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setEditingTabId(page.id);
-                    setEditingTabName(page.name);
-                  }}
-                  onMouseDown={(e) => e.stopPropagation()}
-                  className={`p-1 hover:bg-black/30 rounded text-neutral-400 hover:text-white ${activeScriptPageId === page.id ? 'opacity-100' : 'opacity-0 group-hover/tab:opacity-100'}`}
-                  title="Rename Document"
-                >
-                  <PenLine size={12} />
-                </button>
-              </div>
-            )}
+            <div className="flex items-center gap-1.5">
+              <span className="whitespace-nowrap select-none">{page.name}</span>
+            </div>
             <button 
               onClick={(e) => { 
                 e.stopPropagation(); 
@@ -1030,7 +995,6 @@ export const ScriptEditor: React.FC = () => {
                       <div 
                         key={page.id}
                         className={`flex items-center justify-between p-2 rounded cursor-pointer border transition-colors group/item ${activeScriptPageId === page.id ? 'bg-[#3b82f6] border-blue-400 text-white shadow-sm' : 'bg-[#282828] border-black text-neutral-400 hover:bg-[#333]'}`}
-                        onMouseDown={(e) => e.stopPropagation()}
                         onClick={() => setActiveScriptPageId(page.id)}
                       >
                         <div 
@@ -1039,7 +1003,14 @@ export const ScriptEditor: React.FC = () => {
                           {editingTabId === page.id ? (
                             <input 
                               autoFocus
-                              onFocus={(e) => e.target.select()}
+                              ref={(el) => {
+                                if (el && document.activeElement !== el) {
+                                  setTimeout(() => {
+                                    el.focus();
+                                    el.select();
+                                  }, 10);
+                                }
+                              }}
                               maxLength={30}
                               value={editingTabName}
                               onChange={e => setEditingTabName(e.target.value)}
@@ -1053,36 +1024,33 @@ export const ScriptEditor: React.FC = () => {
                               onKeyDown={e => {
                                 e.stopPropagation();
                                 if (e.key === 'Enter') {
-                                  const trimmed = editingTabName.trim();
-                                  if (trimmed !== '' && trimmed !== page.name) {
-                                    updateNodeName(page.id, trimmed);
-                                  }
-                                  setEditingTabId(null);
+                                  e.preventDefault();
+                                  (e.target as HTMLInputElement).blur();
                                 } else if (e.key === 'Escape') {
+                                  e.preventDefault();
                                   setEditingTabId(null);
                                 }
                               }}
                               className="bg-[#151515] text-white px-1 outline-none w-full rounded border border-blue-500"
-                              onClick={e => e.stopPropagation()}
+                              onPointerDown={e => e.stopPropagation()}
                               onMouseDown={e => e.stopPropagation()}
+                              onClick={e => e.stopPropagation()}
+                              onDoubleClick={e => e.stopPropagation()}
                             />
                           ) : (
-                            <div className="flex items-center gap-1.5">
-                              <div className="truncate select-none">{page.name}</div>
-                              {/* AAA FIX: Explicitly bound to onClick to ensure full focus capture */}
-                              <button 
-                                onClick={(e) => {
+                            <div className="flex items-center gap-1.5 w-full">
+                              <span 
+                                className="truncate select-none cursor-text w-full"
+                                title="Double-click to rename"
+                                onDoubleClick={(e) => {
                                   e.preventDefault();
                                   e.stopPropagation();
                                   setEditingTabId(page.id);
                                   setEditingTabName(page.name);
                                 }}
-                                onMouseDown={(e) => e.stopPropagation()}
-                                className={`p-1 hover:bg-black/30 rounded text-neutral-400 hover:text-white ${activeScriptPageId === page.id ? 'opacity-100' : 'opacity-0 group-hover/item:opacity-100'}`}
-                                title="Rename Document"
                               >
-                                <PenLine size={12} />
-                              </button>
+                                {page.name}
+                              </span>
                             </div>
                           )}
                         </div>
