@@ -8,7 +8,7 @@ import Underline from '@tiptap/extension-underline';
 import { Plus, X } from 'lucide-react';
 import { useProjectStore } from '../store/projectStore';
 import { useAppStore } from '../store/appStore';
-import type { ScriptFolder, ScriptPage } from '@common/models';
+import type { ScriptPage } from '@common/models';
 
 import {
   SceneHeading,
@@ -52,7 +52,6 @@ export const ScriptEditor: React.FC = () => {
   const paginationEnabledRef = useRef(scriptLayout === 'print');
   paginationEnabledRef.current = scriptLayout === 'print';
   
-  // AAA FIX: Track the editor instance alongside the content string to prevent blank states on load
   const lastSyncedContentRef = useRef<string | null>(null);
   const lastSyncedEditorRef = useRef<any>(null);
   
@@ -361,7 +360,6 @@ export const ScriptEditor: React.FC = () => {
     };
     if (activeScriptPageId) findPage(project.rootScriptFolder);
 
-    // If the editor instance is newly mounted, force a sync even if the base64 string matches the last project!
     const isNewEditorInstance = lastSyncedEditorRef.current !== editor;
 
     if (storeBase64 !== lastSyncedContentRef.current || isNewEditorInstance) {
@@ -384,7 +382,7 @@ export const ScriptEditor: React.FC = () => {
         }
         
         lastSyncedContentRef.current = storeBase64;
-        lastSyncedEditorRef.current = editor; // Register the fresh instance
+        lastSyncedEditorRef.current = editor;
         updateOutline(editor);
       } finally {
         loadingPageContentRef.current = false;

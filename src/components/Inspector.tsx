@@ -142,7 +142,9 @@ export const Inspector = () => {
         <div className="border-b border-neutral-800 p-4 shrink-0">
           <h3 className="mb-2 font-bold text-neutral-100 flex items-center gap-1.5">
             Panel timing
-            <HelpCircle size={14} className="text-neutral-500 hover:text-neutral-300 cursor-help transition-colors" title="Controls how long this panel displays and transitions during animatic playback." />
+            <span title="Controls how long this panel displays and transitions during animatic playback." className="flex items-center cursor-help">
+              <HelpCircle size={14} className="text-neutral-500 hover:text-neutral-300 transition-colors" />
+            </span>
           </h3>
           <label className="mb-2 block text-xs text-neutral-400">
             Duration (ms)
