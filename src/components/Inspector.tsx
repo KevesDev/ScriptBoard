@@ -4,6 +4,7 @@ import { Link as LinkIcon, ExternalLink, X } from 'lucide-react';
 import type { PanelTransitionType } from '@common/models';
 import { getSceneScriptContext, trimBlocksForDisplay, type ScriptSceneBlock } from '../lib/scriptSceneExcerpt';
 import { getSceneTitlesFromStoredContent } from '../lib/scriptEditorUtils';
+import { Logger } from '../lib/logger';
 
 function blockStyle(b: ScriptSceneBlock): string {
   switch (b.type) {
@@ -22,34 +23,44 @@ function blockStyle(b: ScriptSceneBlock): string {
 }
 
 export const Inspector = () => {
-  const {
-    project,
-    activePanelId,
-    activeSceneId,
-    activeLayerId,
-    setActiveScriptPageId,
-    timelinePlayheadSec,
-    commitHistory,
-    updatePanelDurationMs,
-    updatePanelTimelineGapSec,
-    setPanelTransitionOut,
-    updateTimelineCameraKeyframe,
-    updateTimelineLayerKeyframe,
-    linkSceneToScript,
-    updatePanelCaptions
-  } = useProjectStore();
+  const project = useProjectStore(s => s.project);
+  const activePanelId = useProjectStore(s => s.activePanelId);
+  const activeSceneId = useProjectStore(s => s.activeSceneId);
+  const activeLayerId = useProjectStore(s => s.activeLayerId);
+  const timelinePlayheadSec = useProjectStore(s => s.timelinePlayheadSec);
+
+  const setActiveScriptPageId = useProjectStore(s => s.setActiveScriptPageId);
+  const commitHistory = useProjectStore(s => s.commitHistory);
+  const updatePanelDurationMs = useProjectStore(s => s.updatePanelDurationMs);
+  const updatePanelTimelineGapSec = useProjectStore(s => s.updatePanelTimelineGapSec);
+  const setPanelTransitionOut = useProjectStore(s => s.setPanelTransitionOut);
+  const updateTimelineCameraKeyframe = useProjectStore(s => s.updateTimelineCameraKeyframe);
+  const updateTimelineLayerKeyframe = useProjectStore(s => s.updateTimelineLayerKeyframe);
+  const linkSceneToScript = useProjectStore(s => s.linkSceneToScript);
+  const updatePanelCaptions = useProjectStore(s => s.updatePanelCaptions);
 
   const [selectedHeadingToLink, setSelectedHeadingToLink] = useState('');
 
+  // AAA FIX: Try/Catch wrapping for completely safe derivations
   const activePanel = useMemo(() => {
-    if (!project || !project.scenes) return null;
-    return project.scenes.flatMap((s) => s.panels || []).find((p) => p.id === activePanelId) || null;
+    try {
+      if (!project || !project.scenes) return null;
+      return project.scenes.flatMap((s) => s.panels || []).find((p) => p.id === activePanelId) || null;
+    } catch (e) {
+      Logger.error('Inspector', `activePanel derivation failed: ${e}`);
+      return null;
+    }
   }, [project, activePanelId]);
 
   const activeScene = useMemo(() => {
-    if (!project || !project.scenes) return null;
-    if (activeSceneId) return project.scenes.find(s => s.id === activeSceneId) || null;
-    return project.scenes.find((s) => (s.panels || []).some((p) => p.id === activePanelId)) || null;
+    try {
+      if (!project || !project.scenes) return null;
+      if (activeSceneId) return project.scenes.find(s => s.id === activeSceneId) || null;
+      return project.scenes.find((s) => (s.panels || []).some((p) => p.id === activePanelId)) || null;
+    } catch (e) {
+      Logger.error('Inspector', `activeScene derivation failed: ${e}`);
+      return null;
+    }
   }, [project, activeSceneId, activePanelId]);
   
   const animatic = project?.timeline?.animaticEditingMode ?? false;
@@ -57,47 +68,65 @@ export const Inspector = () => {
   const kfTol = 0.05;
 
   const camKfAtPlayhead = useMemo(() => {
-    if (!project || !project.timeline || !project.timeline.cameraKeyframes) return null;
-    return project.timeline.cameraKeyframes.find((k) => Math.abs((k.timeSec || 0) - playhead) < kfTol) || null;
+    try {
+      if (!project || !project.timeline || !project.timeline.cameraKeyframes) return null;
+      return project.timeline.cameraKeyframes.find((k) => Math.abs((k.timeSec || 0) - playhead) < kfTol) || null;
+    } catch (e) {
+      return null;
+    }
   }, [project, playhead]);
   
   const layerKfAtPlayhead = useMemo(() => {
-    if (!project || !project.timeline || !project.timeline.layerKeyframes || !activePanelId || !activeLayerId) return null;
-    return project.timeline.layerKeyframes.find(
-      (k) => k.panelId === activePanelId && k.layerId === activeLayerId && Math.abs((k.timeSec || 0) - playhead) < kfTol
-    ) || null;
+    try {
+      if (!project || !project.timeline || !project.timeline.layerKeyframes || !activePanelId || !activeLayerId) return null;
+      return project.timeline.layerKeyframes.find(
+        (k) => k.panelId === activePanelId && k.layerId === activeLayerId && Math.abs((k.timeSec || 0) - playhead) < kfTol
+      ) || null;
+    } catch (e) {
+      return null;
+    }
   }, [project, activePanelId, activeLayerId, playhead]);
 
   const allAvailableHeadings = useMemo(() => {
-    if (!project || !project.rootScriptFolder) return [];
-    const headings: string[] = [];
-    const walk = (folder: any) => {
-      if (!folder || !folder.children) return;
-      for (const child of folder.children) {
-        if (child.type === 'page') {
-          const titles = getSceneTitlesFromStoredContent(child.contentBase64 || '');
-          headings.push(...titles);
-        } else if (child.type === 'folder') {
-          walk(child);
+    try {
+      if (!project || !project.rootScriptFolder) return [];
+      const headings: string[] = [];
+      const walk = (folder: any) => {
+        if (!folder || !folder.children) return;
+        for (const child of folder.children) {
+          if (child.type === 'page') {
+            const titles = getSceneTitlesFromStoredContent(child.contentBase64 || '');
+            headings.push(...titles);
+          } else if (child.type === 'folder') {
+            walk(child);
+          }
         }
-      }
-    };
-    walk(project.rootScriptFolder);
-    return Array.from(new Set(headings)); 
+      };
+      walk(project.rootScriptFolder);
+      return Array.from(new Set(headings)); 
+    } catch (e) {
+      Logger.error('Inspector', `allAvailableHeadings derivation failed: ${e}`);
+      return [];
+    }
   }, [project]);
 
   const panelScriptContext = useMemo(() => {
-    if (!project || !activeScene || !activeScene.linkedScriptNodeId || !project.scenes) return null;
-    const scIdx = project.scenes.findIndex(s => s.id === activeScene.id);
-    const panelIds = activeScene.panels ? activeScene.panels.map((p) => p.id) : [];
-    
-    return getSceneScriptContext(
-      project,
-      activeScene.linkedScriptNodeId,
-      scIdx > -1 ? scIdx : 0,
-      activeScene.id,
-      panelIds,
-    );
+    try {
+      if (!project || !activeScene || !activeScene.linkedScriptNodeId || !project.scenes) return null;
+      const scIdx = project.scenes.findIndex(s => s.id === activeScene.id);
+      const panelIds = activeScene.panels ? activeScene.panels.map((p) => p.id) : [];
+      
+      return getSceneScriptContext(
+        project,
+        activeScene.linkedScriptNodeId,
+        scIdx > -1 ? scIdx : 0,
+        activeScene.id,
+        panelIds,
+      );
+    } catch (e) {
+      Logger.error('Inspector', `panelScriptContext derivation failed: ${e}`);
+      return null;
+    }
   }, [project, activeScene]);
 
   const displayBlocks = useMemo(() => {
