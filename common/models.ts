@@ -217,6 +217,8 @@ export interface Scene {
   name: string;
   order: number;
   panels: Panel[];
+  /** Binds this storyboard scene directly to a specific AST Node ID in the ScriptEditor */
+  linkedScriptNodeId?: string;
 }
 
 export interface ScriptItem {

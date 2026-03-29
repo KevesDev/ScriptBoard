@@ -15,11 +15,13 @@ import {
     allPages,
     activeScriptPageId,
     outlineItems,
+    onAddComment,
   }: {
     editor: any;
     allPages: ScriptPage[];
     activeScriptPageId: string | null;
     outlineItems: { id: string; title: string; pos: number }[];
+    onAddComment?: (id: string, data: any) => void;
   }) => {
     if (!editor) return null;
   
@@ -83,12 +85,17 @@ import {
               editor.chain().focus().unsetMark('comment').run();
             } else {
               const authorName = useProjectStore.getState().project?.settings?.author || 'Unknown Author';
-              editor.chain().focus().setMark('comment', {
-                commentId: Date.now().toString(),
+              const commentId = Date.now().toString();
+              const commentData = {
+                commentId,
                 text: 'New comment...',
                 author: authorName,
                 timestamp: Date.now()
-              }).run();
+              };
+              editor.chain().focus().setMark('comment', commentData).run();
+              if (onAddComment) {
+                onAddComment(commentId, commentData);
+              }
             }
           }}
           className={`p-1.5 rounded hover:bg-[#444] hover:text-white transition-colors ${editor.isActive('comment') ? 'bg-[#444] text-[#eab308] shadow-inner' : ''}`}

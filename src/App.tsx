@@ -302,45 +302,47 @@ function App() {
 
   const backupPromptedIdsRef = useRef<Set<string>>(new Set());
 
-  const runBackup = useCallback(async () => {
-    if (!window.ipcRenderer) return;
-    const project = useProjectStore.getState().project;
-    if (!project) return;
-    if (!backupEnabled) return;
-    try {
-      const res: IpcResponse<{ backupPath?: string }> = await window.ipcRenderer.invoke(
-        IPC_CHANNELS.PROJECT_AUTOSAVE, 
-        project,
-      );
-      if (res.success) return;
-      if (res.code === 'NO_SAVE_PATH') {
-        if (backupPromptedIdsRef.current.has(project.id)) return;
-        backupPromptedIdsRef.current.add(project.id);
+  // AAA Auto-Save Reminder Logic
+  const checkAndPromptUnsaved = useCallback(async (proj: Project) => {
+    if (!window.ipcRenderer) return false;
+    const q = await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_QUERY_SAVE_PATH, proj.id);
+    if (!q?.data?.hasPath) {
+      if (!backupPromptedIdsRef.current.has(proj.id)) {
+        backupPromptedIdsRef.current.add(proj.id);
         await nativeAlert(
-          'Secondary Backups are on, but this project is not saved to a file yet.\n\n' +
-            'Use File → Save or Save As once. After that, ScriptBoard automatically writes the backup file.',
+          'Autosaves and/or Backups are enabled, but this project has not been saved yet.\n\n' +
+          'Please use File → Save or Save As once. After that, ScriptBoard will automatically protect your work.'
         );
       }
+      return false;
+    }
+    return true;
+  }, []);
+
+  const runBackup = useCallback(async () => {
+    if (!window.ipcRenderer) return;
+    const proj = useProjectStore.getState().project;
+    if (!proj || !backupEnabled) return;
+    try {
+      if (!(await checkAndPromptUnsaved(proj))) return;
+      await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_AUTOSAVE, proj);
     } catch (e) {
       console.error('Backup failed:', e);
     }
-  }, [backupEnabled]);
+  }, [backupEnabled, checkAndPromptUnsaved]);
 
   const runAutoSaveMain = useCallback(async () => {
     if (!window.ipcRenderer) return;
-    const project = useProjectStore.getState().project;
-    if (!project) return;
-    if (!autoSaveEnabled) return;
+    const proj = useProjectStore.getState().project;
+    if (!proj || !autoSaveEnabled) return;
     try {
-      const q = await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_QUERY_SAVE_PATH, project.id);
-      if (!q?.data?.hasPath) return; 
-      
-      const serializedProject = JSON.parse(JSON.stringify(project));
+      if (!(await checkAndPromptUnsaved(proj))) return;
+      const serializedProject = JSON.parse(JSON.stringify(proj));
       await window.ipcRenderer.invoke(IPC_CHANNELS.PROJECT_SAVE, serializedProject);
     } catch (e) {
       console.error('Main Autosave failed:', e);
     }
-  }, [autoSaveEnabled]);
+  }, [autoSaveEnabled, checkAndPromptUnsaved]);
 
   useEffect(() => {
     if (!autoSaveEnabled) return;

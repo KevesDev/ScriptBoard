@@ -17,6 +17,10 @@ export interface OutlinerSlice {
   updatePanelHeadTrimToStart: (panelId: string, newStartSec: number, fixedEndSec: number) => void;
   setPanelTransitionOut: (panelId: string, transition: PanelTransition | undefined) => void;
   cyclePanelTransitionOut: (panelId: string) => void;
+  
+  // Phase 2 Sync Actions
+  updatePanelCaptions: (panelId: string, dialogue: string, notes: string) => void;
+  linkSceneToScript: (sceneId: string, scriptNodeId?: string) => void;
 }
 
 export const createOutlinerSlice: StateCreator<ProjectStoreState, [], [], OutlinerSlice> = (set) => ({
@@ -218,5 +222,32 @@ export const createOutlinerSlice: StateCreator<ProjectStoreState, [], [], Outlin
       }));
       if (!found) return state;
       return { project: { ...state.project, scenes } };
+    }),
+
+  updatePanelCaptions: (panelId, dialogue, notes) =>
+    set((state) => {
+      if (!state.project) return state;
+      return {
+        project: {
+          ...state.project,
+          scenes: state.project.scenes.map((s) => ({
+            ...s,
+            panels: s.panels.map((p) => (p.id === panelId ? { ...p, dialogue, notes } : p)),
+          })),
+        },
+      };
+    }),
+
+  linkSceneToScript: (sceneId, scriptNodeId) =>
+    set((state) => {
+      if (!state.project) return state;
+      return {
+        project: {
+          ...state.project,
+          scenes: state.project.scenes.map((s) => 
+            s.id === sceneId ? { ...s, linkedScriptNodeId: scriptNodeId } : s
+          ),
+        },
+      };
     }),
 });

@@ -15,12 +15,11 @@ import {
   useSortable
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useMemo, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useProjectStore } from '../store/projectStore';
-import { Plus, Trash2, Image as ImageIcon, GripVertical, FileText, ExternalLink } from 'lucide-react';
+import { Plus, Trash2, Image as ImageIcon, GripVertical } from 'lucide-react';
 import type { Panel, Scene } from '@common/models';
 import { setPanelIdOnDataTransfer } from '../lib/panelTimelineDnD';
-import { getSceneScriptContext, trimBlocksForDisplay, type ScriptSceneBlock } from '../lib/scriptSceneExcerpt';
 import { nativeConfirm } from '../lib/focusAfterNativeDialog';
 
 // --- CUSTOM DRAG IMAGE GENERATOR ---
@@ -87,7 +86,10 @@ const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: str
             e.dataTransfer.setDragImage(dragImg, 30, 20);
           }
         }}
-        onPointerDown={() => setActivePanelId(panel.id)}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+          setActivePanelId(panel.id);
+        }}
       >
         <div className="absolute inset-0 bg-white">
           {panel.thumbnailBase64 ? (
@@ -128,24 +130,8 @@ const SortablePanel = ({ panel, sceneId, dragImg }: { panel: Panel, sceneId: str
   );
 };
 
-function blockStyle(b: ScriptSceneBlock): string {
-  switch (b.type) {
-    case 'character':
-      return 'text-[11px] font-semibold uppercase tracking-wide text-amber-200/95';
-    case 'dialogue':
-      return 'text-xs leading-snug text-neutral-200 pl-2 border-l-2 border-neutral-600';
-    case 'parenthetical':
-      return 'text-[11px] italic text-neutral-500 pl-3';
-    case 'transition':
-      return 'text-[10px] uppercase tracking-wider text-violet-300/90';
-    case 'action':
-    default:
-      return 'text-xs leading-snug text-neutral-400';
-  }
-}
-
-const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; activePanelId: string | null; dragImg: HTMLImageElement | null }) => {
-  const { addPanel, removeScene, reorderPanels, commitHistory } = useProjectStore();
+const SortableScene = ({ scene, activePanelId, activeSceneId, dragImg }: { scene: Scene; activePanelId: string | null; activeSceneId: string | null; dragImg: HTMLImageElement | null }) => {
+  const { addPanel, removeScene, reorderPanels, commitHistory, setActiveSceneId } = useProjectStore();
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: scene.id });
 
   const style = {
@@ -153,7 +139,8 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
     transition,
   };
 
-  const handleAddPanel = () => {
+  const handleAddPanel = (e: React.MouseEvent) => {
+    e.stopPropagation();
     commitHistory();
     const newPanel: Panel = {
       id: crypto.randomUUID(),
@@ -196,13 +183,19 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
   };
 
   const sceneHasActivePanel = activePanelId != null && scene.panels.some((p) => p.id === activePanelId);
+  const isSceneSelected = activeSceneId === scene.id && activePanelId === null;
 
   return (
     <div 
       ref={setNodeRef}
       style={style}
-      className={`flex flex-col bg-neutral-900 border rounded p-2 w-full min-w-0 shrink-0 ${
-        sceneHasActivePanel ? 'border-sky-600/80 ring-1 ring-sky-500/35' : 'border-neutral-800'
+      onClick={(e) => {
+        e.stopPropagation();
+        setActiveSceneId(scene.id);
+      }}
+      className={`flex flex-col bg-neutral-900 border rounded p-2 w-full min-w-0 shrink-0 transition-colors cursor-pointer ${
+        isSceneSelected ? 'border-sky-500 ring-1 ring-sky-500/50 bg-[#16202a]' :
+        sceneHasActivePanel ? 'border-blue-800/50 ring-1 ring-blue-800/30' : 'border-neutral-800 hover:border-neutral-600'
       }`}
     >
       <div className="flex items-center justify-between mb-2">
@@ -211,14 +204,16 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
           {...attributes} 
           {...listeners}
         >
-          <span className="font-bold text-sm">{scene.name}</span>
+          <GripVertical size={14} className="text-neutral-500" />
+          <span className="font-bold text-sm select-none">{scene.name}</span>
         </div>
         <div className="flex gap-1">
           <button onClick={handleAddPanel} className="p-1 hover:bg-neutral-800 rounded text-neutral-400 hover:text-white" title="Add Panel">
             <Plus size={14} />
           </button>
           <button 
-            onClick={() => {
+            onClick={(e) => {
+              e.stopPropagation();
               void (async () => {
                 if (await nativeConfirm(`Delete ${scene.name}?`)) {
                   commitHistory();
@@ -236,7 +231,7 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
 
       <div className="flex w-full flex-col gap-2">
         {scene.panels.length === 0 ? (
-          <div className="text-xs text-neutral-600 italic px-2 py-1">No panels</div>
+          <div className="text-xs text-neutral-600 italic px-2 py-1 select-none pointer-events-none">No panels</div>
         ) : (
           <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext items={scene.panels.map(p => p.id)} strategy={verticalListSortingStrategy}>
@@ -252,34 +247,12 @@ const SortableScene = ({ scene, activePanelId, dragImg }: { scene: Scene; active
 };
 
 export const Outliner = () => {
-  const { project, addScene, reorderScenes, activePanelId, setActiveScriptPageId, commitHistory } = useProjectStore();
+  const { project, addScene, reorderScenes, activePanelId, activeSceneId, commitHistory, setActiveSceneId } = useProjectStore();
   const dragImgRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
     dragImgRef.current = createDragImage();
   }, []);
-
-  const panelScriptContext = useMemo(() => {
-    if (!project || !activePanelId) return null;
-    const sorted = [...project.scenes].sort((a, b) => a.order - b.order);
-    for (let i = 0; i < sorted.length; i++) {
-      const sc = sorted[i]!;
-      if (!sc.panels.some((p) => p.id === activePanelId)) continue;
-      return getSceneScriptContext(
-        project,
-        sc.name,
-        i,
-        sc.id,
-        sc.panels.map((p) => p.id),
-      );
-    }
-    return null;
-  }, [project, activePanelId]);
-
-  const displayBlocks = useMemo(
-    () => (panelScriptContext ? trimBlocksForDisplay(panelScriptContext.blocks, 28) : []),
-    [panelScriptContext],
-  );
 
   const handleAddScene = () => {
     if (!project) return;
@@ -321,7 +294,7 @@ export const Outliner = () => {
   return (
     <div
       className="flex flex-col h-full w-full bg-neutral-950 p-4"
-      onPointerDown={(e) => e.stopPropagation()}
+      onPointerDown={() => setActiveSceneId(null)} 
     >
       <div className="flex shrink-0 items-center justify-between mb-4">
         <div className="flex items-center gap-2 font-bold text-neutral-200">
@@ -329,70 +302,23 @@ export const Outliner = () => {
           <span>Storyboard Outliner</span>
         </div>
         <button 
-          onClick={handleAddScene}
+          onClick={(e) => { e.stopPropagation(); handleAddScene(); }}
           className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-sm transition-colors"
         >
           <Plus size={16} /> Add Scene
         </button>
       </div>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-2">
-        {activePanelId && (
-          <div className="shrink-0 rounded border border-neutral-700 bg-neutral-900/90 p-3 shadow-sm">
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-sky-400">
-              <FileText size={14} className="shrink-0 opacity-90" />
-              Script for this scene
-            </div>
-            {panelScriptContext ? (
-              <>
-                <div className="mb-2 border-b border-neutral-800 pb-2 font-mono text-[11px] font-medium leading-snug text-neutral-100">
-                  {panelScriptContext.heading}
-                </div>
-                <div className="max-h-[220px] space-y-2 overflow-y-auto pr-1">
-                  {displayBlocks.length === 0 ? (
-                    <p className="text-xs italic text-neutral-500">This scene has no action or dialogue blocks yet.</p>
-                  ) : (
-                    displayBlocks.map((b, idx) => (
-                      <div key={`${idx}-${b.type}-${b.text.slice(0, 40)}`} className={blockStyle(b)}>
-                        {b.text}
-                      </div>
-                    ))
-                  )}
-                </div>
-                {panelScriptContext.blocks.length > displayBlocks.length ? (
-                  <p className="mt-2 text-[10px] text-neutral-500">
-                    Showing {displayBlocks.length} of {panelScriptContext.blocks.length} blocks.
-                  </p>
-                ) : null}
-                <button
-                  type="button"
-                  className="mt-3 flex w-full items-center justify-center gap-1.5 rounded border border-neutral-600 bg-neutral-800 py-1.5 text-[11px] font-medium text-sky-300 transition-colors hover:border-sky-600 hover:bg-neutral-700"
-                  onClick={() => setActiveScriptPageId(panelScriptContext.sourcePageId)}
-                >
-                  <ExternalLink size={12} />
-                  Open “{panelScriptContext.sourcePageName}” in script editor
-                </button>
-              </>
-            ) : (
-              <div className="space-y-2 text-xs leading-relaxed text-neutral-500">
-                <p>
-                  No screenplay slice matched this storyboard scene. Match is by scene heading text (or scene order), or
-                  link your script page in the Inspector.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto pb-2 custom-scrollbar">
         {project.scenes.length === 0 ? (
-          <div className="flex flex-1 w-full items-center justify-center text-neutral-500 italic">
+          <div className="flex flex-1 w-full items-center justify-center text-neutral-500 italic pointer-events-none select-none">
             Click 'Add Scene' to start storyboarding.
           </div>
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleSceneDragEnd}>
             <SortableContext items={project.scenes.map(s => s.id)} strategy={verticalListSortingStrategy}>
               {project.scenes.map(scene => (
-                <SortableScene key={scene.id} scene={scene} activePanelId={activePanelId} dragImg={dragImgRef.current} />
+                <SortableScene key={scene.id} scene={scene} activePanelId={activePanelId} activeSceneId={activeSceneId} dragImg={dragImgRef.current} />
               ))}
             </SortableContext>
           </DndContext>

@@ -617,7 +617,24 @@ export const ScriptEditor: React.FC = () => {
         <button onClick={handleNewPage} className="p-2 ml-1 text-neutral-400 hover:text-white hover:bg-[#323232] rounded" title="New Script Document"><Plus size={16} /></button>
       </div>
 
-      <ScriptMenuBar editor={editor} allPages={allPages} activeScriptPageId={activeScriptPageId} outlineItems={outlineItems} />
+      <ScriptMenuBar 
+        editor={editor} 
+        allPages={allPages} 
+        activeScriptPageId={activeScriptPageId} 
+        outlineItems={outlineItems} 
+        onAddComment={(id, data) => {
+          setActiveCommentId(id);
+          setActiveCommentData({ id, text: data.text, author: data.author });
+          setActiveRightTab('comments');
+          setTimeout(() => {
+            const el = document.getElementById('active-comment-textarea') as HTMLTextAreaElement;
+            if (el) {
+              el.focus();
+              el.select();
+            }
+          }, 100);
+        }}
+      />
       
       <div className="flex flex-1 overflow-hidden">
         <ScriptLeftToolbar editor={editor} />
@@ -923,6 +940,7 @@ export const ScriptEditor: React.FC = () => {
                       <div>
                         <div className="text-[10px] text-neutral-500 uppercase tracking-wide mb-1">Note</div>
                         <textarea 
+                          id="active-comment-textarea"
                           value={activeCommentData.text}
                           onChange={(e) => {
                             const newText = e.target.value;
@@ -932,7 +950,7 @@ export const ScriptEditor: React.FC = () => {
                               applyCommentAttrsById(ed, activeCommentId, { text: newText, timestamp: Date.now() });
                             }
                           }}
-                          className="w-full h-32 bg-[#151515] border border-black rounded p-1.5 text-white text-xs resize-none custom-scrollbar"
+                          className="w-full h-32 bg-[#151515] border border-black rounded p-1.5 text-white text-xs resize-none custom-scrollbar focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                         />
                       </div>
                       <button 

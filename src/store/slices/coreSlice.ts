@@ -8,6 +8,7 @@ import { firstScriptPageId } from './scriptSlice';
 export interface CoreSlice {
   project: Project | null;
   activeScriptPageId: string | null;
+  activeSceneId: string | null;
   activePanelId: string | null;
   activeLayerId: string | null;
   timelinePlayheadSec: number;
@@ -18,6 +19,7 @@ export interface CoreSlice {
   
   setProject: (project: Project) => void;
   setActiveScriptPageId: (pageId: string | null) => void;
+  setActiveSceneId: (sceneId: string | null) => void;
   setActivePanelId: (panelId: string | null) => void;
   setActiveLayerId: (layerId: string | null) => void;
   setTimelinePlayheadSec: (sec: number) => void;
@@ -36,6 +38,7 @@ export interface CoreSlice {
 export const createCoreSlice: StateCreator<ProjectStoreState, [], [], CoreSlice> = (set, get) => ({
   project: null,
   activeScriptPageId: null,
+  activeSceneId: null,
   activePanelId: null,
   activeLayerId: null,
   timelinePlayheadSec: 0,
@@ -49,6 +52,7 @@ export const createCoreSlice: StateCreator<ProjectStoreState, [], [], CoreSlice>
     set({
       project: normalized,
       activeScriptPageId: firstScriptPageId(normalized),
+      activeSceneId: null,
       activePanelId: null,
       activeLayerId: null,
       timelinePlayheadSec: 0,
@@ -59,6 +63,8 @@ export const createCoreSlice: StateCreator<ProjectStoreState, [], [], CoreSlice>
   },
 
   setActiveScriptPageId: (pageId) => set({ activeScriptPageId: pageId }),
+  
+  setActiveSceneId: (sceneId) => set({ activeSceneId: sceneId, activePanelId: null, activeLayerId: null }),
   
   setActivePanelId: (panelId) => {
     const project = get().project;
@@ -72,7 +78,7 @@ export const createCoreSlice: StateCreator<ProjectStoreState, [], [], CoreSlice>
         }
       }
     }
-    set({ activePanelId: panelId, activeLayerId: firstLayerId });
+    set({ activePanelId: panelId, activeLayerId: firstLayerId, activeSceneId: null });
   },
 
   setActiveLayerId: (layerId) => set({ activeLayerId: layerId }),
