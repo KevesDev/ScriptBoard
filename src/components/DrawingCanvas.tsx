@@ -47,6 +47,11 @@ export const DrawingCanvas = () => {
   const engineRef = useRef<StoryboardEngine | null>(null);
   const thumbnailTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // --- AAA Virtual Camera Refs ---
+  const panRef = useRef({ x: 0, y: 0 });
+  const canvasWrapperRef = useRef<HTMLDivElement>(null);
+  // -------------------------------
+
   const isPanningRef = useRef(false);
   const selectionRef = useRef(selectedStrokeIndices); selectionRef.current = selectedStrokeIndices;
   const activePanelRef = useRef(activePanelId); activePanelRef.current = activePanelId;
@@ -99,9 +104,15 @@ export const DrawingCanvas = () => {
 
   const handleZoomIn = useCallback(() => setZoom(z => Math.min(3, z + 0.1)), []);
   const handleZoomOut = useCallback(() => setZoom(z => Math.max(0.1, z - 0.1)), []);
+  
   const fitToScreen = useCallback(() => {
     if (workspaceRef.current) {
       setZoom(Math.min(Math.min((workspaceRef.current.clientWidth - 64) / CANVAS_WIDTH, (workspaceRef.current.clientHeight - 64) / CANVAS_HEIGHT), 1.5));
+      // Reset Virtual Pan coordinates when centering
+      panRef.current = { x: 0, y: 0 };
+      if (canvasWrapperRef.current) {
+        canvasWrapperRef.current.style.transform = `translate(0px, 0px)`;
+      }
     }
   }, []);
 
@@ -504,17 +515,26 @@ export const DrawingCanvas = () => {
         />
 
         <div 
-           className="flex-1 relative overflow-auto bg-[#151515] flex items-center justify-center p-8" 
+           className="flex-1 relative overflow-hidden bg-[#151515] flex items-center justify-center p-8" 
            ref={workspaceRef}
-           onPointerMove={(e) => { if (isPanningRef.current && workspaceRef.current) { workspaceRef.current.scrollLeft -= e.movementX; workspaceRef.current.scrollTop -= e.movementY; } }}
-           onPointerUp={() => { if (isSpacePanning) { isPanningRef.current = false; setIsSpacePanning(false); } }}
-           onPointerLeave={() => { if (isSpacePanning) { isPanningRef.current = false; setIsSpacePanning(false); } }}
+           onPointerMove={(e) => { 
+               if (isPanningRef.current && canvasWrapperRef.current) { 
+                   panRef.current.x += e.movementX; 
+                   panRef.current.y += e.movementY; 
+                   canvasWrapperRef.current.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px)`; 
+               } 
+           }}
+           onPointerUp={() => { if (isSpacePanningRef.current) { isPanningRef.current = false; setIsSpacePanning(false); } }}
+           onPointerLeave={() => { if (isSpacePanningRef.current) { isPanningRef.current = false; setIsSpacePanning(false); } }}
         >
-          <div 
-             ref={mountEngine}
-             className="relative shrink-0 transition-all duration-75 shadow-2xl border border-neutral-600 sb-canvas-transparency-grid" 
-             style={{ width: CANVAS_WIDTH * zoom, height: CANVAS_HEIGHT * zoom, cursor: isSpacePanning ? (isPanningRef.current ? 'grabbing' : 'grab') : 'crosshair' }} 
-          />
+          {/* Virtual Camera Wrapper */}
+          <div ref={canvasWrapperRef} style={{ transform: `translate(${panRef.current.x}px, ${panRef.current.y}px)` }}>
+              <div 
+                 ref={mountEngine}
+                 className="relative shrink-0 transition-all duration-75 shadow-2xl border border-neutral-600 sb-canvas-transparency-grid" 
+                 style={{ width: CANVAS_WIDTH * zoom, height: CANVAS_HEIGHT * zoom, cursor: isSpacePanning ? (isPanningRef.current ? 'grabbing' : 'grab') : 'crosshair' }} 
+              />
+          </div>
         </div>
       </div>
 

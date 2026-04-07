@@ -64,12 +64,13 @@ export function computeDeltas(oldVal: any, newVal: any): { fwd: any, inv: any } 
         }
     }
     return hasChanges ? { fwd, inv } : undefined;
-  }
+}
   
-  export function applyDelta(base: any, delta: any): any {
+export function applyDelta(base: any, delta: any): any {
     if (delta === undefined) return base;
     if (typeof delta !== 'object' || delta === null) return delta;
     
+    // Handle computed array diffs
     if (delta.__isA__) {
         const arr = Array.isArray(base) ? [...base] : [];
         arr.length = delta.l; // Native truncation for deleted elements
@@ -84,9 +85,15 @@ export function computeDeltas(oldVal: any, newVal: any): { fwd: any, inv: any } 
         }
         return arr;
     }
-  
+
     if (delta.__rm__) return undefined;
-  
+
+    // If delta is a raw native array (caught as a raw value, not an __isA__ diff), 
+    // we must clone it as a strict Array to prevent it from degrading into a Dictionary Object.
+    if (Array.isArray(delta)) {
+        return delta.map(item => applyDelta(undefined, item));
+    }
+
     const obj = (typeof base === 'object' && base !== null && !Array.isArray(base)) ? { ...base } : {};
     for (const key in delta) {
         if (delta[key] && typeof delta[key] === 'object' && delta[key].__rm__) {
@@ -96,4 +103,4 @@ export function computeDeltas(oldVal: any, newVal: any): { fwd: any, inv: any } 
         }
     }
     return obj;
-  }
+}

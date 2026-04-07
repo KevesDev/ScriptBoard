@@ -18,11 +18,16 @@ function hexToRgb(hex: string): { r: number; g: number; b: number; a: number } {
   return { r: 0, g: 0, b: 0, a: 255 };
 }
 
+/**
+ * Renders the vector layer to an offscreen canvas.
+ * @param expandWidth Injecting a thickness modifier here acts as Morphological Dilation to close line gaps.
+ */
 function renderVectorLayerToCanvas(
   layer: Layer,
   cw: number,
   ch: number,
   getBrushConfig: (presetId?: string) => BrushConfig,
+  expandWidth: number = 0
 ): HTMLCanvasElement {
   const c = document.createElement('canvas');
   c.width = cw;
@@ -30,13 +35,201 @@ function renderVectorLayerToCanvas(
   const ctx = c.getContext('2d');
   if (!ctx) return c;
   ctx.clearRect(0, 0, cw, ch);
+  
   for (const stroke of layer.strokes || []) {
     const cfg = stroke.brushConfig || getBrushConfig(stroke.preset);
-    renderBrushStrokeToContext(ctx, stroke, cfg);
+    let s = stroke;
+    
+    // Artificially thicken lines if gap closing is requested
+    if (expandWidth > 0 && stroke.tool !== 'fill') {
+      s = { ...stroke, width: stroke.width + expandWidth };
+    }
+    
+    renderBrushStrokeToContext(ctx, s, cfg);
   }
+  
   ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = 'source-over';
   return c;
+}
+
+/**
+ * Fast Morphological Dilation of a boolean mask.
+ * Used to expand the flood-filled area so it naturally slips under the anti-aliased edges of the original line art.
+ */
+function dilateMask(mask: Uint8Array, w: number, h: number, radius: number): Uint8Array {
+  if (radius <= 0) return mask;
+  const out = new Uint8Array(mask.length);
+  out.set(mask);
+  
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (mask[y * w + x] === 1) {
+        const minY = Math.max(0, y - radius);
+        const maxY = Math.min(h - 1, y + radius);
+        const minX = Math.max(0, x - radius);
+        const maxX = Math.min(w - 1, x + radius);
+        
+        for (let dy = minY; dy <= maxY; dy++) {
+          for (let dx = minX; dx <= maxX; dx++) {
+            // Circular bounding check for natural rounded corners
+            if ((dx - x) * (dx - x) + (dy - y) * (dy - y) <= radius * radius) {
+              out[dy * w + dx] = 1;
+            }
+          }
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// --- Path Math Pipeline (Simplification, Resampling, Smoothing, Topology) ---
+
+function getSqDist(px: number, py: number, p1x: number, p1y: number, p2x: number, p2y: number) {
+  let dx = p2x - p1x;
+  let dy = p2y - p1y;
+  
+  if (dx !== 0 || dy !== 0) {
+    const t = ((px - p1x) * dx + (py - p1y) * dy) / (dx * dx + dy * dy);
+    if (t > 1) { 
+      p1x = p2x; 
+      p1y = p2y; 
+    } else if (t > 0) { 
+      p1x += dx * t; 
+      p1y += dy * t; 
+    }
+  }
+  dx = px - p1x; 
+  dy = py - p1y;
+  return dx * dx + dy * dy;
+}
+
+function simplifyDPStep(points: number[], first: number, last: number, sqTolerance: number, simplified: number[]) {
+  let maxSqDist = sqTolerance;
+  let index = -1;
+  const p1x = points[first];
+  const p1y = points[first + 1];
+  const p2x = points[last];
+  const p2y = points[last + 1];
+
+  for (let i = first + 2; i < last; i += 2) {
+    const d = getSqDist(points[i], points[i + 1], p1x, p1y, p2x, p2y);
+    if (d > maxSqDist) {
+      index = i;
+      maxSqDist = d;
+    }
+  }
+
+  if (maxSqDist > sqTolerance) {
+    if (index - first > 2) {
+      simplifyDPStep(points, first, index, sqTolerance, simplified);
+    }
+    simplified.push(points[index], points[index + 1]);
+    if (last - index > 2) {
+      simplifyDPStep(points, index, last, sqTolerance, simplified);
+    }
+  }
+}
+
+function simplifyDP(points: number[], tolerance: number): number[] {
+  if (points.length <= 4) return points;
+  const sqTolerance = tolerance * tolerance;
+  const last = points.length - 2;
+  const simplified = [points[0], points[1]];
+  
+  simplifyDPStep(points, 0, last, sqTolerance, simplified);
+  simplified.push(points[last], points[last + 1]);
+  return simplified;
+}
+
+/**
+ * Resamples a path to ensure no single line segment is longer than `maxLen`.
+ * This prevents Chaikin smoothing from over-chamfering large, straight bounding boxes.
+ */
+function resamplePath(points: number[], maxLen: number): number[] {
+  const resampled: number[] = [];
+  const numPts = points.length / 2;
+  
+  for (let i = 0; i < numPts; i++) {
+    const p1x = points[i * 2];
+    const p1y = points[i * 2 + 1];
+    const p2x = points[((i + 1) % numPts) * 2];
+    const p2y = points[((i + 1) % numPts) * 2 + 1];
+
+    resampled.push(p1x, p1y);
+
+    const dx = p2x - p1x;
+    const dy = p2y - p1y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > maxLen) {
+      const steps = Math.ceil(dist / maxLen);
+      for (let j = 1; j < steps; j++) {
+        resampled.push(p1x + dx * (j / steps), p1y + dy * (j / steps));
+      }
+    }
+  }
+  return resampled;
+}
+
+function chaikinSmooth(points: number[], iterations: number = 2): number[] {
+  if (points.length < 6) return points;
+  let current = points;
+  
+  for (let i = 0; i < iterations; i++) {
+    const next: number[] = [];
+    const numPts = current.length / 2;
+    
+    for (let j = 0; j < numPts; j++) {
+      const p1x = current[j * 2];
+      const p1y = current[j * 2 + 1];
+      const p2x = current[((j + 1) % numPts) * 2];
+      const p2y = current[((j + 1) % numPts) * 2 + 1];
+      
+      next.push(
+        0.75 * p1x + 0.25 * p2x, 
+        0.75 * p1y + 0.25 * p2y,
+        0.25 * p1x + 0.75 * p2x, 
+        0.25 * p1y + 0.75 * p2y
+      );
+    }
+    current = next;
+  }
+  return current;
+}
+
+/**
+ * Evaluates topological winding order using the Shoelace Theorem (Signed Area).
+ */
+function getSignedArea(path: number[]): number {
+  let area = 0;
+  const n = Math.floor(path.length / 2);
+  if (n < 3) return 0;
+  
+  for (let i = 0; i < n; i++) {
+    const x1 = path[i * 2];
+    const y1 = path[i * 2 + 1];
+    const x2 = path[((i + 1) % n) * 2];
+    const y2 = path[((i + 1) % n) * 2 + 1];
+    area += (x1 * y2 - x2 * y1);
+  }
+  return area / 2;
+}
+
+function reversePath(path: number[]): void {
+  const n = Math.floor(path.length / 2);
+  for (let i = 0; i < Math.floor(n / 2); i++) {
+    const opposite = n - 1 - i;
+    
+    let tmp = path[i * 2]; 
+    path[i * 2] = path[opposite * 2]; 
+    path[opposite * 2] = tmp;
+    
+    tmp = path[i * 2 + 1]; 
+    path[i * 2 + 1] = path[opposite * 2 + 1]; 
+    path[opposite * 2 + 1] = tmp;
+  }
 }
 
 /**
@@ -158,13 +351,36 @@ function contoursToFillPaths(
   for (const contour of multi) {
     if (!contour.coordinates) continue;
     for (const polygon of contour.coordinates) {
-      for (const ring of polygon) {
+      
+      // ringIndex 0 is ALWAYS the exterior boundary. ringIndex > 0 are Holes.
+      for (let ringIndex = 0; ringIndex < polygon.length; ringIndex++) {
+        const ring = polygon[ringIndex];
+        const isHole = ringIndex > 0;
+        
         const flatRing: number[] = [];
         for (const point of ring) {
+          // Project to Canvas Space IMMEDIATELY.
+          // This prevents quantized smoothing from creating a magnified gap.
           flatRing.push(point[0] * scaleX, point[1] * scaleY);
         }
+        
         if (flatRing.length >= 6) {
-          fillPaths.push(flatRing);
+          // Canvas-Space Math
+          // Simplifying with a 2.0 pixel tolerance ensures it perfectly hugs the line art
+          const simplified = simplifyDP(flatRing, 2.0);
+          const resampled = resamplePath(simplified, 30); 
+          const smoothed = chaikinSmooth(resampled, 2);
+
+          // Enforce Winding Topology for PIXI Renderer (Shoelace Theorem)
+          const area = getSignedArea(smoothed);
+          if (isHole && area > 0) {
+            reversePath(smoothed);   // Force holes to be negative area
+          }
+          if (!isHole && area < 0) {
+            reversePath(smoothed);  // Force exterior to be positive area
+          }
+
+          fillPaths.push(smoothed);
         }
       }
     }
@@ -188,7 +404,10 @@ export function computeVectorBucketFillPaths(
 ): number[][] | null {
   if (layer.type !== 'vector') return null;
 
-  const full = renderVectorLayerToCanvas(layer, canvasW, canvasH, getBrushConfig);
+  // 1. Gap Closing Dilation (Width expansion)
+  const GAP_CLOSE_EXPAND = 4; 
+  const full = renderVectorLayerToCanvas(layer, canvasW, canvasH, getBrushConfig, GAP_CLOSE_EXPAND);
+  
   const workW = Math.max(1, Math.round(canvasW / workScale));
   const workH = Math.max(1, Math.round(canvasH / workScale));
 
@@ -208,12 +427,22 @@ export function computeVectorBucketFillPaths(
   const fillRgb = hexToRgb(fillHex);
   const mask = new Uint8Array(workW * workH);
 
+  // 2. Flood Fill
   const filled = floodFillToMask(data, workW, workH, wx, wy, fillRgb, mask, false);
   if (!filled) return null;
 
+  // 3. Precise Mask Dilation
+  // Increased the mathematical bleed to guarantee it penetrates 
+  // the anti-aliased edge of the line art, killing the conflation seam.
+  const canvasBleed = (GAP_CLOSE_EXPAND / 2) + 2; 
+  const DILATION_RADIUS = Math.ceil(canvasBleed / workScale);
+  const dilatedMask = dilateMask(mask, workW, workH, DILATION_RADIUS);
+
+  // 4. Contour Extraction & Vectorization
   const scaleX = canvasW / workW;
   const scaleY = canvasH / workH;
-  const paths = contoursToFillPaths(mask, workW, workH, scaleX, scaleY);
+  const paths = contoursToFillPaths(dilatedMask, workW, workH, scaleX, scaleY);
+  
   return paths.length > 0 ? paths : null;
 }
 
@@ -273,4 +502,4 @@ export function applyRasterBucketFromCompositeCanvas(
 
   fctx.putImageData(fullData, 0, 0);
   return full.toDataURL('image/png');
-}
+} 

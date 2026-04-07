@@ -71,17 +71,48 @@ export const drawStampsToContainer = (container: PIXI.Container, stroke: Stroke,
   }
 };
 
+/**
+ * Evaluates topological winding order using the Shoelace Theorem (Signed Area).
+ * Used to determine if a vector path is an exterior boundary or an internal hole.
+ */
+function getSignedArea(path: number[]): number {
+  let area = 0;
+  const n = Math.floor(path.length / 2);
+  if (n < 3) return 0;
+  for (let i = 0; i < n; i++) {
+    const x1 = path[i * 2];
+    const y1 = path[i * 2 + 1];
+    const x2 = path[((i + 1) % n) * 2];
+    const y2 = path[((i + 1) % n) * 2 + 1];
+    area += (x1 * y2 - x2 * y1);
+  }
+  return area / 2;
+}
+
 export const drawStrokeToGraphics = (g: PIXI.Graphics, stroke: Stroke, config: BrushConfig) => {
   if (stroke.tool === 'fill' && stroke.fillPaths) {
     g.beginFill(PIXI.utils.string2hex(stroke.color), config.flow ?? 1.0);
+    
     for (const path of stroke.fillPaths) {
+      // Evaluate winding order. Negative area means it's a hole.
+      const isHole = getSignedArea(path) < 0;
+      
+      if (isHole) {
+        g.beginHole();
+      }
+      
       if (path.length >= 2) {
         g.moveTo(path[0], path[1]);
         for (let i = 2; i < path.length; i += 2) {
           g.lineTo(path[i], path[i + 1]);
         }
       }
+      
+      if (isHole) {
+        g.endHole();
+      }
     }
+    
     g.endFill();
     return;
   }
@@ -230,7 +261,24 @@ export function renderLayersIntoContainer(
     if (layer.type === 'raster' && layer.dataBase64) {
       addRasterFromDataUrl(layerContainer, layer.dataBase64);
     } else if (layer.type === 'vector' && layer.strokes && layer.strokes.length > 0) {
+      
+      // PASS 1: Render Color-Fill Vectors (Bottom of the stack)
       layer.strokes.forEach((stroke, i) => {
+        if (stroke.tool !== 'fill') return; // Only process fills
+        if (isActiveSkin && layer.id === activeLayerId && dragOffset && selectedStrokeIndices.has(i)) {
+          return;
+        }
+        
+        const config = stroke.brushConfig || getBrushConfig(stroke.preset);
+        const g = new PIXI.Graphics();
+        g.blendMode = PIXI.BLEND_MODES.NORMAL;
+        drawStrokeToGraphics(g, stroke, config);
+        layerContainer.addChild(g);
+      });
+
+      // PASS 2: Render Standard Lines and Shapes (Top of the stack)
+      layer.strokes.forEach((stroke, i) => {
+        if (stroke.tool === 'fill') return; // Skip fills, already rendered
         if (isActiveSkin && layer.id === activeLayerId && dragOffset && selectedStrokeIndices.has(i)) {
           return;
         }
@@ -238,7 +286,7 @@ export function renderLayersIntoContainer(
         const config = stroke.brushConfig || getBrushConfig(stroke.preset);
         const isShape = ['line', 'rectangle', 'ellipse'].includes(stroke.tool);
 
-        // FIXED: Explicitly bypass textured stamps if the stroke is a shape
+        // Explicitly bypass textured stamps if the stroke is a shape
         if (config.textureBase64 && !isShape) {
           const c = new PIXI.Container();
           drawStampsToContainer(c, stroke, config);
@@ -253,6 +301,7 @@ export function renderLayersIntoContainer(
           layerContainer.addChild(g);
         }
       });
+      
     } else if (layer.type === 'vector' && layer.dataBase64) {
       addRasterFromDataUrl(layerContainer, layer.dataBase64);
     }
